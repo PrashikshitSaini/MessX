@@ -295,17 +295,45 @@ cancelPokeBtn.addEventListener("click", () => closeModal(pokeUserModal));
 pokeUserForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const chatName = currentChatName.innerText;
-  const usernameToPoke = document.getElementById("pokeUsername").value;
+  const usernameToPoke = document.getElementById("pokeUsername").value.trim();
+
+  if (!usernameToPoke) {
+    showToast("Please enter a username to poke", "error");
+    return;
+  }
+
   try {
+    showToast(`Poking ${usernameToPoke}...`, "info");
     const data = await API.pokeUser(authToken, chatName, usernameToPoke);
+
     if (data.opcode === 0x00) {
-      alert(`Poke sent to ${usernameToPoke}`);
+      showToast(`Poke sent to ${usernameToPoke}!`, "success");
+      document.getElementById("pokeUsername").value = ""; // Clear the input field
       closeModal(pokeUserModal);
+      // Refresh messages to see the poke
+      loadChatMessages(chatName);
     } else {
-      alert("Error sending poke");
+      // Handle specific error codes from the server
+      const errorCode = data.error_opcode;
+      if (errorCode === 0x38) {
+        showToast("Invalid chat name", "error");
+      } else if (errorCode === 0x39) {
+        showToast(
+          `Cannot poke ${usernameToPoke}. User may not exist, is not in this chat, or has blocked you.`,
+          "error"
+        );
+      } else if (errorCode === 0x49) {
+        showToast("You must be a member of the chat to poke users", "error");
+      } else {
+        showToast(
+          `Error sending poke: code ${errorCode.toString(16)}`,
+          "error"
+        );
+      }
     }
   } catch (error) {
     console.error("Poke error", error);
+    showToast("Network error while sending poke", "error");
   }
 });
 
@@ -509,9 +537,12 @@ function createMessageElement(msg, isPinnedDisplay = false) {
   const displayName = msg.display_name || msg.sender;
 
   if (msg.type === 0x01) {
-    // Poke message
+    // Poke message with improved styling
     div.innerHTML = `
-      <div class="message-content">${msg.content}</div>
+      <div class="poke-message">
+        <span class="material-icons poke-icon">notifications_active</span>
+        <div class="message-content">${msg.content}</div>
+      </div>
       <div class="message-timestamp">${msg.timestamp || ""}</div>
     `;
   } else {
@@ -688,14 +719,30 @@ async function pinMessage(messageId, shouldUnpin = false) {
   }
 }
 
-// Improved helper function to delete a message with better error handling
+// Improved helper function to delete a message with better error handling and animation
 async function deleteMessage(messageId) {
   if (!currentChat) {
     showToast("Select a chat first", "error");
     return;
   }
+
   try {
+    // Find the message element in the DOM
+    const messageElement = document.querySelector(
+      `.message[data-message-id="${messageId}"]`
+    );
+    if (!messageElement) {
+      console.warn("Message element not found in DOM");
+      showToast("Message could not be found", "error");
+      return;
+    }
+
+    // Apply the deleting animation class before making the API call
+    messageElement.classList.add("deleting");
+
+    // Show subtle toast
     showToast("Deleting message...", "info");
+
     console.log(
       "Sending request to delete message:",
       messageId,
@@ -703,12 +750,22 @@ async function deleteMessage(messageId) {
       currentChat
     );
 
+    // Make API call to delete the message
     const data = await API.deleteMessage(authToken, currentChat, messageId);
 
     if (data.opcode === 0x00) {
-      showToast("Message deleted successfully", "success");
-      loadChatMessages(currentChat); // Reload to refresh the message list
+      // Wait for animation to complete before removing from DOM
+      setTimeout(() => {
+        if (messageElement.parentNode) {
+          messageElement.parentNode.removeChild(messageElement);
+        }
+
+        showToast("Message deleted successfully", "success");
+      }, 600); // Match this to the animation duration
     } else {
+      // If there was an error, remove the animation class to revert the message
+      messageElement.classList.remove("deleting");
+
       console.error("Delete error response:", data);
       const errorCode = data.error_opcode;
       if (errorCode === 0x22) {
@@ -725,6 +782,14 @@ async function deleteMessage(messageId) {
       }
     }
   } catch (error) {
+    // Make sure to remove the animation if there's an exception
+    const messageElement = document.querySelector(
+      `.message[data-message-id="${messageId}"]`
+    );
+    if (messageElement) {
+      messageElement.classList.remove("deleting");
+    }
+
     console.error("Error deleting message:", error);
     showToast("Network error while deleting message", "error");
   }
@@ -807,7 +872,10 @@ messagesContainer.addEventListener("contextmenu", (e) => {
     } else if (action === "delete") {
       if (confirm("Are you sure you want to delete this message?")) {
         console.log("Deleting message:", messageId);
+        // Close the context menu before starting delete animation
+        document.body.removeChild(contextMenu);
         await deleteMessage(messageId);
+        return; // Return early since we've already removed the context menu
       }
     } else if (action === "edit") {
       currentMessageId = messageId;
@@ -919,7 +987,6 @@ async function loadChats() {
 // Start polling for new messages with better handling of changes
 function startMessagePolling(chatName) {
   stopMessagePolling(); // Clear any existing polling
-
   messagePollingInterval = setInterval(async () => {
     if (!currentChat) return;
     try {
@@ -1076,14 +1143,12 @@ function showDeletedChatEffect() {
   const closeBtn = overlay.querySelector(".close-deleted-chat");
   closeBtn.addEventListener("click", () => {
     document.body.removeChild(overlay);
-
     // Reset current chat
     currentChat = null;
     currentChatName.innerText = "Select a chat";
     messageInput.disabled = true;
     sendMessageBtn.disabled = true;
     pokeBtn.disabled = true;
-
     // Stop polling and reload the chat list
     stopMessagePolling();
     loadChats();
@@ -1109,7 +1174,6 @@ chatList.addEventListener("click", (e) => {
 
   // Add active class to selected chat
   chatItem.classList.add("active");
-
   const selectedChat = chatItem.innerText.trim();
   currentChatName.innerText = selectedChat;
   messageInput.disabled = false;
@@ -1137,7 +1201,6 @@ sendMessageBtn.addEventListener("click", async () => {
 
   try {
     const data = await API.sendMessage(authToken, chatName, message);
-
     if (handleApiError(data)) {
       messageInput.value = "";
       loadChatMessages(chatName, true);
@@ -1185,6 +1248,7 @@ leaveChatBtn.addEventListener("click", async () => {
         messageInput.disabled = true;
         sendMessageBtn.disabled = true;
         // Optionally update chat list...
+        loadChats();
       } else {
         alert("Error leaving chat");
       }
@@ -1456,7 +1520,6 @@ document
     const messageContent =
       messageDiv.querySelector(".message-content").innerText;
     document.getElementById("editMessageInput").value = messageContent;
-
     openModal(editMessageModal);
   });
 
@@ -1512,28 +1575,9 @@ editMessageForm.addEventListener("submit", async (e) => {
 // Delete Message
 messagesContainer.addEventListener("contextmenu", async (e) => {
   e.preventDefault();
-  const messageDiv = e.target.closest(".message");
-  if (!messageDiv) return;
-
-  const messageId = messageDiv.dataset.messageId;
-  if (!messageId) {
-    console.warn("Message ID not found");
-    return;
-  }
-
-  if (confirm("Are you sure you want to delete this message?")) {
-    try {
-      const data = await API.deleteMessage(authToken, currentChat, messageId);
-      if (data.opcode === 0x00) {
-        alert("Message deleted successfully");
-        loadChatMessages(currentChat); // Reload messages to reflect deletion
-      } else {
-        alert("Error deleting message");
-      }
-    } catch (error) {
-      console.error("Delete message error", error);
-    }
-  }
+  // This is a duplicate event handler, so we'll keep it simple and just return
+  // The main contextmenu handler above will handle all context menu functionality
+  return;
 });
 
 // Add periodic chat list refresh
@@ -1554,86 +1598,234 @@ document.addEventListener("DOMContentLoaded", () => {
   if (joinParam) {
     // Store the invite link to use after login
     localStorage.setItem("pendingInviteLink", joinParam);
-
     // Show a message to user
     const inviteBanner = document.createElement("div");
     inviteBanner.className = "invite-banner";
     inviteBanner.innerHTML = `
-      <span class="material-icons">link</span> 
+      <span class="material-icons">link</span>
       <span>You've been invited to join a chat. Please log in to continue.</span>
     `;
     document.querySelector(".auth-container").prepend(inviteBanner);
     // Clean URL to remove the invite parameter
     window.history.replaceState({}, document.title, window.location.pathname);
   }
+});
 
-  // Add a button to the sidebar to manage blocked users
-  const userInfo = document.querySelector(".user-info");
-  const manageBlockedBtn = document.createElement("button");
-  manageBlockedBtn.id = "manageBlockedBtn";
-  manageBlockedBtn.className = "btn icon-btn";
-  manageBlockedBtn.title = "Manage Blocked Users";
-  manageBlockedBtn.innerHTML = '<span class="material-icons">block</span>';
-  userInfo.appendChild(manageBlockedBtn);
+// Add a button to the sidebar to manage blocked users
+const userInfo = document.querySelector(".user-info");
+const manageBlockedBtn = document.createElement("button");
+manageBlockedBtn.id = "manageBlockedBtn";
+manageBlockedBtn.className = "btn icon-btn";
+manageBlockedBtn.title = "Manage Blocked Users";
+manageBlockedBtn.innerHTML = '<span class="material-icons">block</span>';
+userInfo.appendChild(manageBlockedBtn);
 
-  manageBlockedBtn.addEventListener("click", async () => {
-    await loadBlockedUsers();
-    openModal(blockedUsersModal);
-  });
+manageBlockedBtn.addEventListener("click", async () => {
+  await loadBlockedUsers();
+  openModal(blockedUsersModal);
+});
 
-  // Re-add event listener for generate invite link button to ensure it's connected
-  if (generateInviteLinkBtn) {
-    console.log("Adding event listener to generate invite link button");
-    generateInviteLinkBtn.addEventListener("click", async () => {
-      console.log("Generate invite link button clicked");
-      if (!currentChat) {
-        showToast("No chat selected", "error");
-        return;
-      }
+// Re-add event listener for generate invite link button to ensure it's connected
+if (generateInviteLinkBtn) {
+  console.log("Adding event listener to generate invite link button");
+  generateInviteLinkBtn.addEventListener("click", async () => {
+    console.log("Generate invite link button clicked");
+    if (!currentChat) {
+      showToast("No chat selected", "error");
+      return;
+    }
 
-      try {
-        showToast("Generating invite link...", "info");
-        console.log(
-          "Sending request to generate invite link for chat:",
-          currentChat
-        );
-        const data = await API.generateInviteLink(authToken, currentChat);
+    try {
+      showToast("Generating invite link...", "info");
+      const data = await API.generateInviteLink(authToken, currentChat);
 
-        if (data.opcode === 0x00) {
-          // Create a shareable URL with the invite code
-          const baseUrl = window.location.origin;
-          const fullInviteUrl = `${baseUrl}/?join=${data.invite_link}`;
+      if (data.opcode === 0x00) {
+        // Create a shareable URL with the invite token (not exposing chat ID)
+        const baseUrl = window.location.origin;
+        // Use the token directly - it no longer contains the chat ID
+        const fullInviteUrl = `${baseUrl}/?join=${encodeURIComponent(
+          data.invite_link
+        )}`;
 
-          // Display the complete URL in the invite link modal
-          document.getElementById("inviteLinkInput").value = fullInviteUrl;
+        // Display the URL in the invite link modal
+        const inviteLinkInput = document.getElementById("inviteLinkInput");
+        if (inviteLinkInput) {
+          inviteLinkInput.value = fullInviteUrl;
           closeModal(chatSettingsModal);
           openModal(document.getElementById("inviteLinkModal"));
 
-          // Add copy functionality
-          const copyBtn = document.getElementById("copyInviteLinkBtn");
-          if (copyBtn) {
-            copyBtn.addEventListener("click", () => {
-              const inviteLinkInput =
-                document.getElementById("inviteLinkInput");
-              inviteLinkInput.select();
-              document.execCommand("copy");
-              showToast("Invite link copied to clipboard", "success");
-            });
-          }
-        } else {
-          const errorCode = data.error_opcode;
-          showToast(
-            API.getErrorMessage("0x22", errorCode.toString(16)),
-            "error"
-          );
+          // Select the text for easy copying
+          inviteLinkInput.select();
+
+          // Reset event listeners to prevent duplicates
+          const emailBtn = document.getElementById("emailInviteBtn");
+          const smsBtn = document.getElementById("smsInviteBtn");
+
+          // Clone and replace buttons to remove old event listeners
+          const newEmailBtn = emailBtn.cloneNode(true);
+          const newSmsBtn = smsBtn.cloneNode(true);
+          emailBtn.parentNode.replaceChild(newEmailBtn, emailBtn);
+          smsBtn.parentNode.replaceChild(newSmsBtn, smsBtn);
+
+          // Add sharing functionality with fresh event listeners
+          newEmailBtn.addEventListener("click", () => {
+            const subject = "Join my chat on MessX";
+            const body = `I've invited you to join a chat on MessX. Click this link to join: ${fullInviteUrl}`;
+            window.open(
+              `mailto:?subject=${encodeURIComponent(
+                subject
+              )}&body=${encodeURIComponent(body)}`
+            );
+          });
+
+          newSmsBtn.addEventListener("click", () => {
+            const message = `Join my chat on MessX: ${fullInviteUrl}`;
+            // Check if device supports SMS links
+            if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+              window.open(`sms:?&body=${encodeURIComponent(message)}`);
+            } else {
+              // Fallback for desktop
+              showToast(
+                "SMS sharing is only available on mobile devices",
+                "info"
+              );
+              navigator.clipboard.writeText(message);
+              showToast("Message copied to clipboard", "success");
+            }
+          });
         }
-      } catch (error) {
-        console.error("Error generating invite link:", error);
-        showToast("Network error while generating invite link", "error");
+      } else {
+        const errorCode = data.error_opcode;
+        showToast(API.getErrorMessage("0x22", errorCode.toString(16)), "error");
       }
-    });
-  } else {
-    console.error("Generate invite link button not found in DOM");
+    } catch (error) {
+      console.error("Error generating invite link:", error);
+      showToast("Network error while generating invite link", "error");
+    }
+  });
+} else {
+  console.error("Generate invite link button not found in DOM");
+}
+
+// Copy invite link functionality with more clear user feedback
+document.getElementById("copyInviteLinkBtn").addEventListener("click", () => {
+  const inviteLinkInput = document.getElementById("inviteLinkInput");
+  inviteLinkInput.select();
+
+  try {
+    // Try the modern clipboard API first
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard
+        .writeText(inviteLinkInput.value)
+        .then(() => {
+          showCopiedFeedback();
+        })
+        .catch(() => {
+          // Fall back to the older method if permission denied
+          document.execCommand("copy");
+          showCopiedFeedback();
+        });
+    } else {
+      // Fall back for older browsers
+      document.execCommand("copy");
+      showCopiedFeedback();
+    }
+  } catch (err) {
+    console.error("Failed to copy text: ", err);
+    showToast("Failed to copy link", "error");
+  }
+});
+
+// Helper function for copy feedback
+function showCopiedFeedback() {
+  // Change button text temporarily
+  const copyBtn = document.getElementById("copyInviteLinkBtn");
+  const originalText = copyBtn.textContent;
+  copyBtn.textContent = "Copied!";
+  copyBtn.disabled = true;
+
+  setTimeout(() => {
+    copyBtn.textContent = originalText;
+    copyBtn.disabled = false;
+  }, 2000);
+
+  showToast("Secure invite link copied to clipboard", "success");
+}
+
+// Enhanced join chat by link functionality
+async function joinChatViaInviteLink(inviteLink) {
+  try {
+    showToast("Joining chat...", "info");
+    const data = await API.joinChatByLink(authToken, inviteLink);
+
+    if (data.opcode === 0x00) {
+      // Get chat that was joined
+      const chatName = data.chat_name;
+
+      // Show a welcome message
+      const messagesContainer = document.querySelector(".messages-container");
+      const welcomeBanner = document.createElement("div");
+      welcomeBanner.className = "welcome-banner";
+      welcomeBanner.innerHTML = `
+        <span class="material-icons">celebration</span>
+        <div>
+          <strong>Welcome to ${chatName}!</strong>
+          <p>You've successfully joined this chat via an invite link.</p>
+        </div>
+      `;
+      messagesContainer.prepend(welcomeBanner);
+
+      // Auto-remove the welcome banner after 10 seconds
+      setTimeout(() => {
+        if (welcomeBanner.parentNode) {
+          welcomeBanner.parentNode.removeChild(welcomeBanner);
+        }
+      }, 10000);
+
+      // Update the chat list and select the new chat
+      await loadChats();
+      switchChat(chatName);
+
+      showToast(`Successfully joined chat: ${chatName}`, "success");
+    } else {
+      const errorCode = data.error_opcode;
+      let errorMsg = API.getErrorMessage("0x23", errorCode.toString(16));
+      showToast(`Failed to join chat: ${errorMsg}`, "error");
+    }
+  } catch (error) {
+    console.error("Error joining chat via invite link:", error);
+    showToast("Network error while joining chat", "error");
+  }
+}
+
+// Enhanced invite link detection in URL
+document.addEventListener("DOMContentLoaded", () => {
+  // ...existing code...
+
+  // Check if there's an invite link in URL
+  const joinParam = getUrlParameter("join");
+  if (joinParam) {
+    // Create a more prominent invitation banner
+    const inviteBanner = document.createElement("div");
+    inviteBanner.className = "invite-banner";
+    inviteBanner.innerHTML = `
+      <span class="material-icons">groups</span>
+      <div>
+        <strong>You've been invited to join a chat!</strong>
+        <p>Please log in or create an account to join the conversation.</p>
+      </div>
+    `;
+    document.querySelector(".auth-container").prepend(inviteBanner);
+
+    // Store the invite link to use after login
+    try {
+      localStorage.setItem("pendingInviteLink", decodeURIComponent(joinParam));
+    } catch (e) {
+      localStorage.setItem("pendingInviteLink", joinParam);
+    }
+
+    // Clean URL to remove the invite parameter
+    window.history.replaceState({}, document.title, window.location.pathname);
   }
 });
 
@@ -1708,7 +1900,6 @@ function handleApiError(data, defaultMessage = "An error occurred") {
       }
 
       showErrorModal("Authentication Error", errorMessage);
-
       // If it's an authentication error, also logout the user
       if (errorOpcode === 0x48) {
         logoutUser();
@@ -1769,13 +1960,12 @@ async function joinChatViaInviteLink(inviteLink) {
       const welcomeBanner = document.createElement("div");
       welcomeBanner.className = "welcome-banner";
       welcomeBanner.innerHTML = `
-        <span class="material-icons">celebration</span> 
+        <span class="material-icons">celebration</span>
         <div>
           <strong>Welcome to ${chatName}!</strong>
           <p>You've successfully joined this chat via an invite link.</p>
         </div>
       `;
-
       messagesContainer.prepend(welcomeBanner);
 
       // Auto-remove the welcome banner after 10 seconds
@@ -1801,7 +1991,7 @@ async function joinChatViaInviteLink(inviteLink) {
   }
 }
 
-// Function to block a user
+// Function to block a username
 async function blockUser(username) {
   try {
     const data = await API.blockUser(authToken, username);
@@ -1857,29 +2047,23 @@ async function loadBlockedUsers() {
     const blockedUsersList = document.getElementById("blockedUsersList");
     blockedUsersList.innerHTML =
       '<div class="loading">Loading blocked users...</div>';
-
     const data = await API.getBlockedUsers(authToken);
-
     if (data.opcode === 0x00) {
       blockedUsersList.innerHTML = "";
-
       if (!data.blocked_users || data.blocked_users.length === 0) {
         blockedUsersList.innerHTML =
           '<div class="empty-state">No blocked users</div>';
         return;
       }
-
       data.blocked_users.forEach((username) => {
         const userItem = document.createElement("div");
         userItem.className = "blocked-user-item";
-
         userItem.innerHTML = `
           <span class="blocked-username">${username}</span>
           <button class="unblock-btn" data-username="${username}">
             <span class="material-icons">person_add</span> Unblock
           </button>
         `;
-
         blockedUsersList.appendChild(userItem);
       });
 
@@ -1998,241 +2182,15 @@ const debouncedHandleMessagesScroll = debounce(function () {
       const messageId = messageDiv.dataset.messageId;
       if (messageId && !messageDiv.classList.contains("read-marked")) {
         // Add to pending batch instead of making individual API calls
-        if (!pendingReadMessages.includes(messageId)) {
-          pendingReadMessages.push(messageId);
-          // Mark as processed locally
-          messageDiv.classList.add("read-marked");
-        }
+        pendingReadMessages.push(messageId);
+        // Mark as processed locally
+        messageDiv.classList.add("read-marked");
       }
     }
   });
 
   // We don't immediately process - the interval timer will handle it
 }, 300); // Reduced to 300ms from 500ms for more responsive marking
-
-// Update generate invite link button handler for improved security
-generateInviteLinkBtn.addEventListener("click", async () => {
-  if (!currentChat) {
-    showToast("No chat selected", "error");
-    return;
-  }
-
-  try {
-    showToast("Generating invite link...", "info");
-    const data = await API.generateInviteLink(authToken, currentChat);
-
-    if (data.opcode === 0x00) {
-      // Create a shareable URL with the invite token (not exposing chat ID)
-      const baseUrl = window.location.origin;
-      // Use the token directly - it no longer contains the chat ID
-      const fullInviteUrl = `${baseUrl}/?join=${encodeURIComponent(
-        data.invite_link
-      )}`;
-
-      // Display the URL in the invite link modal
-      const inviteLinkInput = document.getElementById("inviteLinkInput");
-      if (inviteLinkInput) {
-        inviteLinkInput.value = fullInviteUrl;
-        closeModal(chatSettingsModal);
-        openModal(document.getElementById("inviteLinkModal"));
-
-        // Select the text for easy copying
-        inviteLinkInput.select();
-
-        // Reset event listeners to prevent duplicates
-        const emailBtn = document.getElementById("emailInviteBtn");
-        const smsBtn = document.getElementById("smsInviteBtn");
-
-        // Clone and replace buttons to remove old event listeners
-        const newEmailBtn = emailBtn.cloneNode(true);
-        const newSmsBtn = smsBtn.cloneNode(true);
-        emailBtn.parentNode.replaceChild(newEmailBtn, emailBtn);
-        smsBtn.parentNode.replaceChild(newSmsBtn, smsBtn);
-
-        // Add sharing functionality with fresh event listeners
-        newEmailBtn.addEventListener("click", () => {
-          const subject = "Join my chat on MessX";
-          const body = `I've invited you to join a chat on MessX. Click this link to join: ${fullInviteUrl}`;
-          window.open(
-            `mailto:?subject=${encodeURIComponent(
-              subject
-            )}&body=${encodeURIComponent(body)}`
-          );
-        });
-
-        newSmsBtn.addEventListener("click", () => {
-          const message = `Join my chat on MessX: ${fullInviteUrl}`;
-          // Check if device supports SMS links
-          if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-            window.open(`sms:?&body=${encodeURIComponent(message)}`);
-          } else {
-            // Fallback for desktop
-            showToast(
-              "SMS sharing is only available on mobile devices",
-              "info"
-            );
-            navigator.clipboard.writeText(message);
-            showToast("Message copied to clipboard", "success");
-          }
-        });
-      }
-    } else {
-      const errorCode = data.error_opcode;
-      showToast(API.getErrorMessage("0x22", errorCode.toString(16)), "error");
-    }
-  } catch (error) {
-    console.error("Error generating invite link:", error);
-    showToast("Network error while generating invite link", "error");
-  }
-});
-
-// Copy invite link functionality with more clear user feedback
-document.getElementById("copyInviteLinkBtn").addEventListener("click", () => {
-  const inviteLinkInput = document.getElementById("inviteLinkInput");
-  inviteLinkInput.select();
-
-  try {
-    // Try the modern clipboard API first
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard
-        .writeText(inviteLinkInput.value)
-        .then(() => {
-          showCopiedFeedback();
-        })
-        .catch(() => {
-          // Fall back to the older method if permission denied
-          document.execCommand("copy");
-          showCopiedFeedback();
-        });
-    } else {
-      // Fall back for older browsers
-      document.execCommand("copy");
-      showCopiedFeedback();
-    }
-  } catch (err) {
-    console.error("Failed to copy text: ", err);
-    showToast("Failed to copy link", "error");
-  }
-});
-
-// Helper function for copy feedback
-function showCopiedFeedback() {
-  // Change button text temporarily
-  const copyBtn = document.getElementById("copyInviteLinkBtn");
-  const originalText = copyBtn.textContent;
-  copyBtn.textContent = "Copied!";
-  copyBtn.disabled = true;
-
-  setTimeout(() => {
-    copyBtn.textContent = originalText;
-    copyBtn.disabled = false;
-  }, 2000);
-
-  showToast("Secure invite link copied to clipboard", "success");
-}
-
-// Enhanced join chat by link functionality
-async function joinChatViaInviteLink(inviteLink) {
-  try {
-    showToast("Joining chat...", "info");
-    const data = await API.joinChatByLink(authToken, inviteLink);
-
-    if (data.opcode === 0x00) {
-      // Get chat that was joined
-      const chatName = data.chat_name;
-
-      // Show a welcome message
-      const messagesContainer = document.querySelector(".messages-container");
-      const welcomeBanner = document.createElement("div");
-      welcomeBanner.className = "welcome-banner";
-      welcomeBanner.innerHTML = `
-        <span class="material-icons">celebration</span> 
-        <div>
-          <strong>Welcome to ${chatName}!</strong>
-          <p>You've successfully joined this chat via an invite link.</p>
-        </div>
-      `;
-
-      messagesContainer.prepend(welcomeBanner);
-
-      // Auto-remove the welcome banner after 10 seconds
-      setTimeout(() => {
-        if (welcomeBanner.parentNode) {
-          welcomeBanner.parentNode.removeChild(welcomeBanner);
-        }
-      }, 10000);
-
-      // Update the chat list and select the new chat
-      await loadChats();
-      switchChat(chatName);
-
-      showToast(`Successfully joined chat: ${chatName}`, "success");
-    } else {
-      const errorCode = data.error_opcode;
-      let errorMsg = API.getErrorMessage("0x23", errorCode.toString(16));
-      showToast(`Failed to join chat: ${errorMsg}`, "error");
-    }
-  } catch (error) {
-    console.error("Error joining chat via invite link:", error);
-    showToast("Network error while joining chat", "error");
-  }
-}
-
-// Enhanced invite link detection in URL
-document.addEventListener("DOMContentLoaded", () => {
-  // ...existing code...
-
-  // Check if there's an invite link in URL
-  const joinParam = getUrlParameter("join");
-  if (joinParam) {
-    // Create a more prominent invitation banner
-    const inviteBanner = document.createElement("div");
-    inviteBanner.className = "invite-banner";
-    inviteBanner.innerHTML = `
-      <span class="material-icons">groups</span> 
-      <div>
-        <strong>You've been invited to join a chat!</strong>
-        <p>Please log in or create an account to join the conversation.</p>
-      </div>
-    `;
-    document.querySelector(".auth-container").prepend(inviteBanner);
-
-    // Store the invite link to use after login
-    try {
-      localStorage.setItem("pendingInviteLink", decodeURIComponent(joinParam));
-    } catch (e) {
-      localStorage.setItem("pendingInviteLink", joinParam);
-    }
-
-    // Clean URL to remove the invite parameter
-    window.history.replaceState({}, document.title, window.location.pathname);
-
-    // Show login tab by default since they need to log in
-    document.getElementById("loginTab").click();
-  }
-
-  // ...existing code...
-});
-
-// Copy invite link functionality
-document.getElementById("copyInviteLinkBtn").addEventListener("click", () => {
-  const inviteLinkInput = document.getElementById("inviteLinkInput");
-  inviteLinkInput.select();
-  document.execCommand("copy");
-
-  // Change button text temporarily
-  const copyBtn = document.getElementById("copyInviteLinkBtn");
-  const originalText = copyBtn.textContent;
-  copyBtn.textContent = "Copied!";
-  copyBtn.disabled = true;
-
-  setTimeout(() => {
-    copyBtn.textContent = originalText;
-    copyBtn.disabled = false;
-  }, 2000);
-
-  showToast("Invite link copied to clipboard", "success");
-});
 
 // Add the scroll event listener to handle message visibility
 messagesContainer.addEventListener("scroll", debouncedHandleMessagesScroll);
