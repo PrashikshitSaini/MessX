@@ -25,6 +25,69 @@ const API = {
         requestData.authentication_token = authToken;
       }
 
+      // Encrypt sensitive data if needed (for messages and other sensitive operations)
+      if (opcode === 0x10) {
+        // Send message opcode
+        try {
+          // If we're sending a message, encrypt it
+          const userKeys = await AuthUtils.getUserKeys();
+
+          if (userKeys) {
+            // For group chats, we would need to encrypt for each recipient
+            // For this example, we'll just encrypt with the sender's own public key
+            // In a real implementation, we would encrypt for each recipient in the chat
+            const encryptedMessage = await CryptoUtils.encryptMessage(
+              data.message,
+              userKeys.publicKey
+            );
+
+            // Replace the plaintext message with encrypted data
+            requestData.message = JSON.stringify(encryptedMessage);
+            requestData.is_encrypted = true;
+          } else {
+            console.warn(
+              "No encryption keys available, sending message in plaintext"
+            );
+            // Still send the message, but unencrypted
+            requestData.message = data.message;
+            requestData.is_encrypted = false;
+          }
+        } catch (error) {
+          console.error("Error encrypting message:", error);
+          // Fallback to unencrypted message if encryption fails
+          requestData.message = data.message;
+          requestData.is_encrypted = false;
+        }
+      }
+
+      // Handle edit message encryption as well
+      if (opcode === 0x11 && data.updated_message) {
+        try {
+          const userKeys = await AuthUtils.getUserKeys();
+
+          if (userKeys) {
+            const encryptedMessage = await CryptoUtils.encryptMessage(
+              data.updated_message,
+              userKeys.publicKey
+            );
+
+            // Replace the plaintext message with encrypted data
+            requestData.updated_message = JSON.stringify(encryptedMessage);
+            requestData.is_encrypted = true;
+          } else {
+            console.warn(
+              "No encryption keys available, sending edited message in plaintext"
+            );
+            requestData.updated_message = data.updated_message;
+            requestData.is_encrypted = false;
+          }
+        } catch (error) {
+          console.error("Error encrypting edited message:", error);
+          requestData.updated_message = data.updated_message;
+          requestData.is_encrypted = false;
+        }
+      }
+
       const response = await fetch(`${this.BASE_URL}${endpoint}`, {
         method: "POST",
         headers: {
@@ -33,29 +96,103 @@ const API = {
         body: JSON.stringify(requestData),
       });
 
-      return await response.json();
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+
+      const responseData = await response.json();
+
+      // Decrypt message data if needed
+      if (responseData.messages && Array.isArray(responseData.messages)) {
+        try {
+          const userKeys = await AuthUtils.getUserKeys();
+          if (userKeys) {
+            // Process each message to decrypt if necessary
+            for (let i = 0; i < responseData.messages.length; i++) {
+              const msg = responseData.messages[i];
+              if (msg.is_encrypted && msg.content) {
+                try {
+                  // Parse the encrypted content
+                  const encryptedPackage = JSON.parse(msg.content);
+                  // Decrypt the message
+                  const decryptedContent = await CryptoUtils.decryptMessage(
+                    encryptedPackage,
+                    userKeys.privateKey
+                  );
+                  // Replace with decrypted content
+                  responseData.messages[i].content = decryptedContent;
+                  responseData.messages[i].is_encrypted = false;
+                } catch (error) {
+                  console.error("Error decrypting message:", error);
+                  // Keep encrypted message as is if decryption fails
+                  responseData.messages[i].content =
+                    "[Encrypted message - cannot decrypt]";
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Error processing message decryption:", error);
+          // Continue without decrypting if there's an error
+        }
+      }
+
+      return responseData;
     } catch (error) {
-      console.error(`API error in request to ${endpoint}:`, error);
-      throw error;
+      console.error("API request error:", error);
+      return { opcode: 0xff, error_message: error.toString() };
     }
   },
 
   async createAccount(username, passwordHash) {
-    return this.makeRequest("/create-account", 0x01, null, {
+    const result = await this.makeRequest("/create-account", 0x01, null, {
       username,
       passwordHash,
     });
+
+    // If account creation was successful, generate encryption keys
+    if (result.opcode === 0x01) {
+      try {
+        // Generate and store encryption keys for the new user
+        const keyData = await AuthUtils.generateAndStoreUserKeys();
+        console.log("Generated new encryption keys for user", username);
+      } catch (error) {
+        console.error("Error generating encryption keys:", error);
+        // We still return success even if key generation fails
+        // The app will fall back to unencrypted messages
+      }
+    }
+
+    return result;
   },
 
   async login(username, passwordHash) {
     // Generate a secure 32-byte client nonce
     const clientNonce = AuthUtils.generateSecureNonce();
 
-    return this.makeRequest("/login", 0x00, null, {
+    const result = await this.makeRequest("/login", 0x00, null, {
       username,
       passwordHash,
       clientNonce,
     });
+
+    // If login was successful, check if we have encryption keys or need to generate them
+    if (result.opcode === 0x01) {
+      try {
+        let userKeys = await AuthUtils.getUserKeys();
+
+        if (!userKeys) {
+          // Generate new keys if none exist
+          const keyData = await AuthUtils.generateAndStoreUserKeys();
+          console.log("Generated new encryption keys after login");
+        }
+      } catch (error) {
+        console.error("Error with encryption keys after login:", error);
+        // The app will continue without encryption if key handling fails
+      }
+    }
+
+    return result;
   },
 
   async createChat(authToken, chatName) {
@@ -105,7 +242,6 @@ const API = {
     });
   },
 
-  // New method to mark a message as read
   async markMessageAsRead(authToken, chatName, messageId) {
     return this.makeRequest("/mark-message-read", 0x20, authToken, {
       chat_name: chatName,
@@ -113,7 +249,6 @@ const API = {
     });
   },
 
-  // New method to mark multiple messages as read in a single request
   async markMessagesAsRead(authToken, chatName, messageIds) {
     return this.makeRequest("/mark-messages-read", 0x25, authToken, {
       chat_name: chatName,
@@ -121,7 +256,6 @@ const API = {
     });
   },
 
-  // New method to get read receipts for a specific message
   async getReadReceipts(authToken, chatName, messageId) {
     return this.makeRequest("/get-read-receipts", 0x21, authToken, {
       chat_name: chatName,
@@ -238,15 +372,38 @@ const API = {
     });
   },
 
-  // Helper methods
+  async exchangePublicKey(authToken, username) {
+    const userKeys = await AuthUtils.getUserKeys();
+    if (!userKeys) {
+      throw new Error("User encryption keys not found");
+    }
+
+    // Send our public key to the server
+    const result = await this.makeRequest(
+      "/exchange-public-key",
+      0x30,
+      authToken,
+      {
+        username,
+        public_key: userKeys.publicKeyString,
+      }
+    );
+
+    // If successful and the server returned the other user's public key
+    if (result.opcode === 0x30 && result.public_key) {
+      // Store the contact's public key
+      AuthUtils.storeContactPublicKey(username, result.public_key);
+    }
+
+    return result;
+  },
+
   generateNonce() {
     return AuthUtils.generateSecureNonce();
   },
 
-  // Error code to user-friendly message mapping
   getErrorMessage(opcode, errorOpcode) {
     const errorMessages = {
-      // Authentication errors
       "0x00": {
         "0x03": "Invalid username or password",
         "0x45": "Server error during login",
@@ -256,7 +413,6 @@ const API = {
         "0x02": "Invalid password format or complexity requirements not met",
         "0x45": "Server error while creating account",
       },
-      // Chat management errors
       "0x02": {
         "0x06": "Invalid chat name (minimum 3 characters required)",
         "0x49": "You don't have permission to create chats",
@@ -284,7 +440,6 @@ const API = {
         "0x49": "Only the chat creator can delete the chat",
         "0x45": "Server error while deleting chat",
       },
-      // Message management errors
       "0x10": {
         "0x17": "Chat not found",
         "0x18": "Message cannot be empty",
@@ -308,7 +463,6 @@ const API = {
           "You can only delete your own messages or messages in chats you created",
         "0x45": "Server error while deleting message",
       },
-      // Role management errors
       "0x13": {
         "0x24": "Chat not found",
         "0x25": "Invalid role name or role already exists",
@@ -334,14 +488,12 @@ const API = {
         "0x49": "You must be a member of the chat to view roles",
         "0x45": "Server error while retrieving roles",
       },
-      // Poke feature errors
       "0x19": {
         "0x38": "Chat not found",
         "0x39": "User not found, not in this chat, or has blocked you",
         "0x49": "You must be a member of the chat to poke users",
         "0x45": "Server error while poking user",
       },
-      // Pin message errors
       "0x17": {
         "0x34": "Chat not found",
         "0x35": "Message not found",
@@ -354,7 +506,6 @@ const API = {
         "0x49": "You must be a member of the chat to unpin messages",
         "0x45": "Server error while unpinning message",
       },
-      // Invite link errors
       "0x22": {
         "0x43": "Chat not found",
         "0x49": "Only the chat creator can generate invite links",
@@ -366,14 +517,12 @@ const API = {
         "0x52": "Invalid invite link",
         "0x45": "Server error while joining chat",
       },
-      // Display name errors
       "0x06": {
         "0x12": "Chat not found",
         "0x13": "Invalid display name or user not found",
         "0x49": "You must be a member of the chat to change display names",
         "0x45": "Server error while changing display name",
       },
-      // Block/unblock user errors
       "0x08": {
         "0x15": "User not found",
         "0x49": "You cannot block yourself",
@@ -383,14 +532,12 @@ const API = {
         "0x16": "User not found",
         "0x45": "Server error while unblocking user",
       },
-      // Add error messages for batch read receipts
       "0x25": {
         "0x17": "Chat not found",
         "0x20": "Some messages could not be found",
         "0x49": "You don't have permission to mark messages in this chat",
         "0x45": "Server error while marking messages as read",
       },
-      // General errors
       default: {
         "0x44": "Unknown operation",
         "0x45": "Server error",
@@ -399,17 +546,14 @@ const API = {
       },
     };
 
-    // First check for specific error message
     if (errorMessages[opcode] && errorMessages[opcode][errorOpcode]) {
       return errorMessages[opcode][errorOpcode];
     }
 
-    // Fall back to default error messages
     if (errorMessages.default[errorOpcode]) {
       return errorMessages.default[errorOpcode];
     }
 
-    // If we can't find a specific message, return a generic one with the code
     return `Error occurred (code: ${errorOpcode})`;
   },
 };

@@ -557,7 +557,7 @@ function createMessageElement(msg, isPinnedDisplay = false) {
         }
         ${rolesDisplay}
       </div>
-      <div class="message-content">${msg.content}</div>
+      <div class="message-content">${handleEncryptedMessage(msg.content)}</div>
       <div class="message-footer">
         ${
           msg.edited
@@ -2194,3 +2194,30 @@ const debouncedHandleMessagesScroll = debounce(function () {
 
 // Add the scroll event listener to handle message visibility
 messagesContainer.addEventListener("scroll", debouncedHandleMessagesScroll);
+
+// Add the following function near your message processing logic to handle decryption failures gracefully
+
+// Inside your app.js, look for the section where you load chat messages
+// Add this function near that code (it's only shown as a snippet that should be added)
+
+function handleEncryptedMessage(messageContent) {
+  // If the message appears to be encrypted but couldn't be decrypted
+  if (messageContent === "[Encrypted message - cannot decrypt]") {
+    // Try to initialize keys if needed
+    (async () => {
+      const userKeys = await AuthUtils.getUserKeys();
+      if (!userKeys) {
+        // Try to generate new keys if they don't exist
+        await AuthUtils.generateAndStoreUserKeys();
+      }
+    })();
+
+    return `<div class="encrypted-message-notice">
+              <span class="material-icons">lock</span>
+              This message is encrypted and cannot be decrypted with your current keys.
+            </div>`;
+  }
+
+  // Regular message content
+  return messageContent;
+}

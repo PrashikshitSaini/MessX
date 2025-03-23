@@ -53,6 +53,112 @@ const AuthUtils = {
   },
 
   /**
+   * Generate and store a new key pair for the current user
+   * @returns {Promise<Object>} Object containing the public key for sharing
+   */
+  async generateAndStoreUserKeys() {
+    try {
+      // Generate the key pair
+      const keyPair = await CryptoUtils.generateKeyPair();
+
+      // Export the keys to storable format
+      const publicKeyString = await CryptoUtils.exportPublicKey(
+        keyPair.publicKey
+      );
+      const privateKeyString = await CryptoUtils.exportPrivateKey(
+        keyPair.privateKey
+      );
+
+      // Store keys in localStorage (in a real app, privateKey would be better secured)
+      localStorage.setItem("userPublicKey", publicKeyString);
+      localStorage.setItem("userPrivateKey", privateKeyString);
+
+      return {
+        publicKey: publicKeyString,
+        publicKeyObj: keyPair.publicKey,
+        privateKeyObj: keyPair.privateKey,
+      };
+    } catch (error) {
+      console.error("Error generating user keys:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Retrieve the current user's keys
+   * @returns {Promise<Object>} Object containing the user's keys
+   */
+  async getUserKeys() {
+    try {
+      const publicKeyString = localStorage.getItem("userPublicKey");
+      const privateKeyString = localStorage.getItem("userPrivateKey");
+
+      if (!publicKeyString || !privateKeyString) {
+        return null;
+      }
+
+      try {
+        const publicKey = await CryptoUtils.importPublicKey(publicKeyString);
+        const privateKey = await CryptoUtils.importPrivateKey(privateKeyString);
+
+        return {
+          publicKey,
+          privateKey,
+          publicKeyString,
+        };
+      } catch (error) {
+        console.error("Error importing user keys:", error);
+
+        // If import fails, try regenerating keys
+        console.log("Attempting to regenerate keys...");
+        localStorage.removeItem("userPublicKey");
+        localStorage.removeItem("userPrivateKey");
+
+        // Return null to trigger key regeneration
+        return null;
+      }
+    } catch (error) {
+      console.error("Error in getUserKeys:", error);
+      return null;
+    }
+  },
+
+  /**
+   * Store a contact's public key
+   * @param {string} username - The username of the contact
+   * @param {string} publicKeyString - The contact's public key as a base64 string
+   */
+  storeContactPublicKey(username, publicKeyString) {
+    const contactKeysJson = localStorage.getItem("contactPublicKeys") || "{}";
+    const contactKeys = JSON.parse(contactKeysJson);
+
+    contactKeys[username] = publicKeyString;
+    localStorage.setItem("contactPublicKeys", JSON.stringify(contactKeys));
+  },
+
+  /**
+   * Get a contact's public key
+   * @param {string} username - The username of the contact
+   * @returns {Promise<CryptoKey|null>} The contact's public key or null if not found
+   */
+  async getContactPublicKey(username) {
+    const contactKeysJson = localStorage.getItem("contactPublicKeys") || "{}";
+    const contactKeys = JSON.parse(contactKeysJson);
+
+    const publicKeyString = contactKeys[username];
+    if (!publicKeyString) {
+      return null;
+    }
+
+    try {
+      return await CryptoUtils.importPublicKey(publicKeyString);
+    } catch (error) {
+      console.error(`Error importing public key for ${username}:`, error);
+      return null;
+    }
+  },
+
+  /**
    * Helper method to convert ArrayBuffer to Base64 string
    * @private
    */
