@@ -145,7 +145,7 @@ def login():
         }
         
         logger.info(f"User {username} logged in successfully, secure token created")
-        return jsonify({'opcode': 0x00, 'authentication_token': session_token})
+        return jsonify({'opcode': 0x01, 'authentication_token': session_token})
     except Exception as e:
         logger.error(f"Error during login: {str(e)}")
         return jsonify({'opcode': 0x00, 'error_opcode': 0x45})  # Unknown error

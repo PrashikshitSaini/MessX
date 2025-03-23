@@ -114,41 +114,65 @@ loginForm.addEventListener("submit", async (e) => {
     const passwordHash = await sha256(password);
     const data = await API.login(username, passwordHash);
 
-    if (handleApiError(data)) {
-      if (data.authentication_token) {
-        // Validate and securely store the authentication token
-        const validToken = AuthUtils.storeToken(data.authentication_token);
-        if (!validToken) {
-          showErrorModal(
-            "Authentication Error",
-            "Server returned an invalid authentication token format."
-          );
-          return;
-        }
+    console.log("Login response:", data); // For debugging
 
-        // Store the valid token
-        authToken = data.authentication_token;
-        currentUsername = username;
-        currentUsernameSpan.innerText = username;
-        authContainer.classList.add("hidden");
-        mainContainer.classList.remove("hidden");
-        loadChats(); // Load chats after login
-        showToast(`Welcome back, ${username}!`, "success");
-
-        // Check if there's a pending invite link
-        const pendingInviteLink = localStorage.getItem("pendingInviteLink");
-        if (pendingInviteLink) {
-          showToast("Joining chat via invite link...", "info");
-          joinChatViaInviteLink(pendingInviteLink);
-          localStorage.removeItem("pendingInviteLink");
-        }
-      } else {
-        // This shouldn't happen with proper server response, but just in case
+    // Directly check for successful login (opcode 0x01)
+    if (data.opcode === 0x01 && data.authentication_token) {
+      // Validate and securely store the authentication token
+      const validToken = AuthUtils.storeToken(data.authentication_token);
+      if (!validToken) {
         showErrorModal(
           "Authentication Error",
-          "Server did not return a valid authentication token."
+          "Server returned an invalid authentication token format."
         );
+        return;
       }
+
+      // Store the valid token
+      authToken = data.authentication_token;
+      currentUsername = username;
+      currentUsernameSpan.innerText = username;
+      authContainer.classList.add("hidden");
+      mainContainer.classList.remove("hidden");
+      loadChats(); // Load chats after login
+      showToast(`Welcome back, ${username}!`, "success");
+
+      // Check if there's a pending invite link
+      const pendingInviteLink = localStorage.getItem("pendingInviteLink");
+      if (pendingInviteLink) {
+        showToast("Joining chat via invite link...", "info");
+        joinChatViaInviteLink(pendingInviteLink);
+        localStorage.removeItem("pendingInviteLink");
+      }
+    } else if (data.error_opcode) {
+      // Handle specific error cases
+      const errorOpcode = data.error_opcode;
+      const opcode = data.opcode;
+
+      if (errorOpcode === 0x03 && opcode === 0x00) {
+        showToast("Invalid username or password", "error");
+        document.getElementById("loginPassword").focus();
+        document.getElementById("loginPassword").select();
+      } else if (errorOpcode === 0x45) {
+        // Special handling for server errors which might be quota issues
+        showErrorModal(
+          "Server Error",
+          "The server encountered a problem (possibly a quota limit). Please try again in a few minutes."
+        );
+      } else {
+        // Get user-friendly error message from API
+        const errorMessage = API.getErrorMessage(
+          opcode.toString(16),
+          errorOpcode.toString(16)
+        );
+        showErrorModal("Authentication Error", errorMessage);
+      }
+    } else {
+      // Fallback error for unexpected response format
+      showErrorModal(
+        "Authentication Error",
+        "Server response was invalid. Please try again."
+      );
     }
   } catch (error) {
     console.error("Login failed", error);
@@ -194,21 +218,63 @@ registerForm.addEventListener("submit", async (e) => {
     const passwordHash = await sha256(password);
     const data = await API.createAccount(username, passwordHash);
 
-    if (handleApiError(data)) {
-      showToast("Account created successfully! Please log in.", "success");
-      // Switch to login tab
-      authTabs.forEach((t) => t.classList.remove("active"));
-      document
-        .querySelector('.auth-tab[data-tab="login"]')
-        .classList.add("active");
-      loginForm.classList.remove("hidden");
-      registerForm.classList.add("hidden");
+    console.log("Account creation response:", data); // Debug log
 
-      // Pre-fill username for convenience
-      document.getElementById("loginUsername").value = username;
+    // Direct check for success opcode instead of using handleApiError
+    if (data.opcode === 0x00) {
+      // Generate encryption keys explicitly here
+      try {
+        const keyData = await AuthUtils.generateAndStoreUserKeys();
+        console.log("Generated new encryption keys for user", username);
+
+        // Continue with the success flow
+        showToast("Account created successfully! Please log in.", "success");
+        // Switch to login tab
+        authTabs.forEach((t) => t.classList.remove("active"));
+        document
+          .querySelector('.auth-tab[data-tab="login"]')
+          .classList.add("active");
+        loginForm.classList.remove("hidden");
+        registerForm.classList.add("hidden");
+
+        // Pre-fill username for convenience
+        document.getElementById("loginUsername").value = username;
+      } catch (keyError) {
+        console.error("Failed to generate encryption keys:", keyError);
+        showErrorModal(
+          "Encryption Setup Error",
+          "Your account was created, but we couldn't set up encryption. Please try logging in."
+        );
+
+        // Still switch to login tab despite the encryption error
+        authTabs.forEach((t) => t.classList.remove("active"));
+        document
+          .querySelector('.auth-tab[data-tab="login"]')
+          .classList.add("active");
+        loginForm.classList.remove("hidden");
+        registerForm.classList.add("hidden");
+        document.getElementById("loginUsername").value = username;
+      }
+    } else if (data.error_opcode) {
+      // Handle specific error codes
+      if (data.error_opcode === 0x01) {
+        showToast("Username already taken. Please choose another.", "error");
+      } else if (data.error_opcode === 0x02) {
+        showToast("Invalid password format.", "error");
+      } else {
+        // Get user-friendly error message from API
+        const errorMessage = API.getErrorMessage(
+          data.opcode.toString(16),
+          data.error_opcode.toString(16)
+        );
+        showToast(errorMessage, "error");
+      }
+    } else {
+      // Fallback for unknown errors
+      showToast("An unexpected error occurred. Please try again.", "error");
     }
   } catch (error) {
-    console.error("Registration error", error);
+    console.error("Registration error:", error);
     showErrorModal(
       "Connection Error",
       "Failed to connect to the server. Please check your internet connection and try again."
@@ -375,17 +441,20 @@ async function processPendingReadReceipts() {
     pendingReadMessages = [];
     lastReadBatchTime = now;
 
-    // Make a single API call with all message IDs
-    const data = await API.markMessagesAsRead(
-      authToken,
-      currentChat,
-      messagesToProcess
-    );
+    if (messagesToProcess.length > 0) {
+      console.log(`Processing ${messagesToProcess.length} read receipts`);
 
-    if (data.opcode !== 0x00) {
-      console.error("Error marking messages as read:", data.error_opcode);
-      // If there's an error, we don't add the messages back to the queue
-      // as they'll likely fail again
+      // Make a single API call with all message IDs
+      const data = await API.markMessagesAsRead(
+        authToken,
+        currentChat,
+        messagesToProcess
+      );
+
+      if (data.opcode !== 0x00) {
+        console.error("Error marking messages as read:", data.error_opcode);
+        // If there's an error, don't add the messages back to the queue
+      }
     }
   } catch (error) {
     console.error("Error processing read receipts:", error);
@@ -967,10 +1036,26 @@ async function loadChats() {
         chatList.innerHTML = `<div class="empty-state">No chats yet. Create one!</div>`;
         return;
       }
-      data.chats.forEach((chat) => {
+
+      // Sort chats alphabetically for easier finding
+      const sortedChats = [...data.chats].sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+
+      sortedChats.forEach((chat) => {
         const chatItem = document.createElement("div");
         chatItem.className = "chat-item";
+        // Add a special class for creator-owned chats
+        if (chat.is_owner) {
+          chatItem.classList.add("owner");
+        }
         chatItem.innerText = chat.name;
+
+        // If this is the current chat, mark it as active
+        if (currentChat && chat.name === currentChat) {
+          chatItem.classList.add("active");
+        }
+
         chatList.appendChild(chatItem);
       });
     } else {
@@ -1884,12 +1969,7 @@ function handleApiError(data, defaultMessage = "An error occurred") {
     );
 
     // For authentication errors, show in modal
-    if (
-      errorOpcode === 0x48 ||
-      errorOpcode === 0x03 ||
-      opcode === 0x00 ||
-      opcode === 0x01
-    ) {
+    if (errorOpcode === 0x48 || errorOpcode === 0x03) {
       // Special case for invalid credentials
       if (errorOpcode === 0x03 && opcode === 0x00) {
         showToast("Invalid username or password", "error");
@@ -2171,26 +2251,35 @@ async function showReadReceipts(messageId) {
 
 // Fix the message scroll handling to use debouncing with optimized read marking
 const debouncedHandleMessagesScroll = debounce(function () {
-  // Find messages that are now visible and mark them as read
-  const messages = document.querySelectorAll(".message.incoming");
+  if (!currentChat || !authToken) return;
+
+  const messages = document.querySelectorAll(
+    ".message.incoming:not(.read-marked)"
+  );
+  const newMessagesToMark = [];
 
   messages.forEach((messageDiv) => {
     const rect = messageDiv.getBoundingClientRect();
-    const isVisible = rect.top >= 0 && rect.bottom <= window.innerHeight;
+    const isInViewport = rect.top >= 0 && rect.bottom <= window.innerHeight;
 
-    if (isVisible) {
+    if (isInViewport) {
       const messageId = messageDiv.dataset.messageId;
-      if (messageId && !messageDiv.classList.contains("read-marked")) {
-        // Add to pending batch instead of making individual API calls
-        pendingReadMessages.push(messageId);
-        // Mark as processed locally
+      if (messageId) {
+        newMessagesToMark.push(messageId);
         messageDiv.classList.add("read-marked");
       }
     }
   });
 
-  // We don't immediately process - the interval timer will handle it
-}, 300); // Reduced to 300ms from 500ms for more responsive marking
+  if (newMessagesToMark.length > 0) {
+    pendingReadMessages = [...pendingReadMessages, ...newMessagesToMark];
+
+    // If there are many pending messages, process them immediately
+    if (pendingReadMessages.length > 5) {
+      processPendingReadReceipts();
+    }
+  }
+}, 300);
 
 // Add the scroll event listener to handle message visibility
 messagesContainer.addEventListener("scroll", debouncedHandleMessagesScroll);
@@ -2221,3 +2310,149 @@ function handleEncryptedMessage(messageContent) {
   // Regular message content
   return messageContent;
 }
+
+// Add a missing switchChat function after the loadChats function
+function switchChat(chatName) {
+  if (!chatName) return;
+
+  // Find the chat item in the list
+  const chatItems = document.querySelectorAll(".chat-item");
+  let chatFound = false;
+
+  chatItems.forEach((item) => {
+    if (item.innerText.trim() === chatName) {
+      // Trigger a click on this chat item
+      item.click();
+      chatFound = true;
+    }
+  });
+
+  if (!chatFound) {
+    console.warn(`Chat "${chatName}" not found in the list`);
+    showToast(`Could not find chat "${chatName}"`, "warning");
+
+    // Force refresh the chat list to make sure it's up to date
+    loadChats().then(() => {
+      // Try again after reloading
+      setTimeout(() => {
+        const updatedChatItems = document.querySelectorAll(".chat-item");
+        updatedChatItems.forEach((item) => {
+          if (item.innerText.trim() === chatName) {
+            item.click();
+          }
+        });
+      }, 500);
+    });
+  }
+}
+
+// Improve batch read receipt processing (replace existing interval)
+let readReceiptProcessingInterval = null;
+function startReadReceiptProcessing() {
+  // Clear any existing interval
+  if (readReceiptProcessingInterval) {
+    clearInterval(readReceiptProcessingInterval);
+  }
+
+  // Process pending read receipts every 1.5 seconds
+  readReceiptProcessingInterval = setInterval(processPendingReadReceipts, 1500);
+}
+
+// Call this at page load to start the processing
+startReadReceiptProcessing();
+
+// Initialize the blocked users modal if it doesn't exist
+document.addEventListener("DOMContentLoaded", () => {
+  // Check if blocked users modal exists, if not create it
+  if (!document.getElementById("blockedUsersModal")) {
+    const blockedUsersModal = document.createElement("div");
+    blockedUsersModal.className = "modal";
+    blockedUsersModal.id = "blockedUsersModal";
+    blockedUsersModal.innerHTML = `
+      <div class="modal-content">
+        <h3>Blocked Users</h3>
+        <div class="blocked-users-list" id="blockedUsersList">
+          <!-- Blocked users will be listed here -->
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary close-modal">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(blockedUsersModal);
+  }
+
+  // Check if invite link modal exists, if not create it
+  if (!document.getElementById("inviteLinkModal")) {
+    const inviteLinkModal = document.createElement("div");
+    inviteLinkModal.className = "modal";
+    inviteLinkModal.id = "inviteLinkModal";
+    inviteLinkModal.innerHTML = `
+      <div class="modal-content">
+        <h3>Invite Link</h3>
+        <p class="invite-link-instructions">Share this link with others to invite them to this chat:</p>
+        <div class="invite-link-container">
+          <input type="text" id="inviteLinkInput" readonly />
+          <button id="copyInviteLinkBtn" class="btn primary">Copy</button>
+        </div>
+        <div class="invite-link-sharing">
+          <button id="emailInviteBtn" class="btn btn-share">
+            <span class="material-icons">email</span> Email
+          </button>
+          <button id="smsInviteBtn" class="btn btn-share">
+            <span class="material-icons">sms</span> SMS
+          </button>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary close-modal">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(inviteLinkModal);
+  }
+
+  // Initialize any missing event listeners
+  document.querySelectorAll(".close-modal").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      btn.closest(".modal").classList.remove("active");
+    });
+  });
+
+  // Add error modal if it doesn't exist
+  if (!document.getElementById("errorModal")) {
+    const errorModal = document.createElement("div");
+    errorModal.className = "modal";
+    errorModal.id = "errorModal";
+    errorModal.innerHTML = `
+      <div class="modal-content">
+        <h3 id="errorModalTitle">Error</h3>
+        <div class="error-container">
+          <div class="error-icon">
+            <span class="material-icons">error</span>
+          </div>
+          <div id="errorModalMessage">An error occurred.</div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary close-modal">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(errorModal);
+  }
+
+  // Add event listener for the copy button if it exists
+  const copyBtn = document.getElementById("copyInviteLinkBtn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", () => {
+      const inviteLinkInput = document.getElementById("inviteLinkInput");
+      if (inviteLinkInput) {
+        inviteLinkInput.select();
+        document.execCommand("copy");
+        showToast("Link copied to clipboard!", "success");
+      }
+    });
+  }
+
+  // Start polling for read receipts
+  startReadReceiptProcessing();
+});

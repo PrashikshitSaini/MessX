@@ -151,7 +151,8 @@ const API = {
     });
 
     // If account creation was successful, generate encryption keys
-    if (result.opcode === 0x01) {
+    // Server returns opcode 0x00 for success, not 0x01
+    if (result.opcode === 0x00) {
       try {
         // Generate and store encryption keys for the new user
         const keyData = await AuthUtils.generateAndStoreUserKeys();

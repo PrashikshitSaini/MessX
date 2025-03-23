@@ -189,6 +189,12 @@ select {
   font-weight: 500;
 }
 
+/* Owner chat styling */
+.chat-item.owner {
+  border-left: 3px solid var(--primary-color);
+  font-weight: 500;
+}
+
 .user-info {
   padding: 15px;
   border-top: 1px solid var(--border-color);
@@ -257,6 +263,12 @@ select {
   align-self: flex-start;
   background-color: white;
   border: 1px solid var(--border-color);
+}
+
+/* Read marked message styling */
+.message.read-marked {
+  /* Subtle visual cue that message has been marked as read */
+  border-left-color: var(--success-color);
 }
 
 .message.poke {
@@ -1076,4 +1088,63 @@ input:invalid {
   50% {
     box-shadow: 0 0 10px 2px rgba(220, 53, 69, 0.3);
   }
+}
+
+/* Enhanced view for blocked users */
+.blocked-users-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-bottom: 15px;
+}
+
+.blocked-user-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.blocked-user-item:last-child {
+  border-bottom: none;
+}
+
+.blocked-username {
+  font-weight: 500;
+}
+
+.unblock-btn {
+  background: none;
+  border: none;
+  color: var(--primary-color);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.unblock-btn:hover {
+  background-color: var(--primary-light);
+}
+
+/* Encrypted message notice styling */
+.encrypted-message-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--warning-color);
+  font-style: italic;
+  background-color: rgba(255, 193, 7, 0.1);
+  padding: 8px;
+  border-radius: 4px;
+  margin: 5px 0;
+}
+
+.encrypted-message-notice .material-icons {
+  font-size: 16px;
 }
