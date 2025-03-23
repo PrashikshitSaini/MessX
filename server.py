@@ -613,35 +613,23 @@ def get_chat_messages():
             msg_data = msg.to_dict()
             sender_uid = msg_data.get('sender_uid')
             
-            # Skip messages from blocked users
-            if sender_uid in blocked_users:
-                # Add placeholder for blocked messages to maintain chat continuity
-                message_obj = {
-                    'id': msg.id,
-                    'is_blocked': True,
-                    'timestamp': msg_data.get('timestamp').strftime('%Y-%m-%d %H:%M:%S') if msg_data.get('timestamp') else None
-                }
-                message_list.append(message_obj)
-                continue
-            
-            # Skip messages from users who blocked the requester
-            if sender_uid in users_who_blocked_me:
-                # Add placeholder for blocked messages to maintain chat continuity
-                message_obj = {
-                    'id': msg.id,
-                    'is_blocked': True,
-                    'timestamp': msg_data.get('timestamp').strftime('%Y-%m-%d %H:%M:%S') if msg_data.get('timestamp') else None
-                }
-                message_list.append(message_obj)
-                continue
-            
-            # Format the timestamp if it exists
+            # Check if the message is from a blocked user or by a user who blocked the requester
+            is_blocked = (sender_uid in blocked_users or requester_uid in users_who_blocked_me)
+
+            # Get custom display names if available
+            custom_display_names = {}
+            if user_prefs.exists:
+                user_prefs_data = user_prefs.to_dict()
+                # Get custom display names for this chat
+                chat_display_names = user_prefs_data.get('custom_display_names', {}).get(chat_id, {})
+                if chat_display_names:
+                    custom_display_names = chat_display_names
+
+            # Format the timestamp
             timestamp = msg_data.get('timestamp')
             timestamp_str = None
             if timestamp:
-                # Handle both Firestore timestamps and string timestamps
                 if hasattr(timestamp, 'strftime'):
-                    # Use UTC format for consistency
                     timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 elif isinstance(timestamp, str):
                     timestamp_str = timestamp
@@ -668,24 +656,32 @@ def get_chat_messages():
                 'pinned': msg.id == pinned_message_id,
                 'sender_roles': sender_roles,
                 'sender_uid': sender_uid,
-                'is_blocked': False,
+                'is_blocked': is_blocked,
                 'delivered_to': msg_data.get('delivered_to', []),
                 'read_by': msg_data.get('read_by', [])
             }
             message_list.append(message_obj)
             
-            # Mark message as delivered if not already delivered to this user
-            delivered_to = msg_data.get('delivered_to', [])
-            delivered_usernames = [entry.get('username') for entry in delivered_to]
+            # Mark message as delivered if not already delivered to this user and not from this user
+            if not is_blocked:  # Don't mark blocked messages as delivered
+                delivered_to = msg_data.get('delivered_to', [])
+                requesting_username = session['username']
+                delivered_usernames = [entry.get('username') for entry in delivered_to]
+                
+                if requesting_username not in delivered_usernames and msg_data.get('sender_username') != requesting_username:
+                    # Add timestamp for delivery
+                    delivery_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    # Update the message with the delivery information
+                    msg.reference.update({
+                        'delivered_to': firestore.ArrayUnion([{
+                            'username': requesting_username,
+                            'time': delivery_time
+                        }])
+                    })
+                    
+                    logger.info(f"Marked message {msg.id} as delivered to {requesting_username}")
             
-            if requester_uid not in delivered_usernames and msg_data.get('sender_uid') != requester_uid:
-                msg.reference.update({
-                    'delivered_to': firestore.ArrayUnion([{
-                        'username': requester_uid,
-                        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    }])
-                })
-        
         # If there's a pinned message and it's not in the current message list (too old),
         # fetch it separately
         if pinned_message_id and not any(msg['id'] == pinned_message_id for msg in message_list):
@@ -866,7 +862,6 @@ def delete_chat():
                 batch.delete(doc.reference)
                 deleted += 1
             batch.commit()
-            
             # If we deleted fewer than batch_size, we're done
             if len(docs) < batch_size:
                 break
@@ -894,9 +889,6 @@ def delete_message():
     # Log the received data for debugging
     logger.info(f"Received delete-message request: chat_name={chat_name}, message_id={message_id}")
 
-    if opcode != 0x12:
-        return jsonify({'opcode': opcode, 'error_opcode': 0x44})  # Unknown opcode
-
     try:
         # Verify the token
         session = verify_token(auth_token)
@@ -911,26 +903,23 @@ def delete_message():
         chat_query = chats_ref.where('name', '==', chat_name).limit(1).get()
         
         if not chat_query or len(chat_query) == 0:
-            logger.warning(f"User {requesting_uid} attempted to delete message in non-existent chat: '{chat_name}'")
+            logger.warning(f"Chat '{chat_name}' not found for message deletion")
             return jsonify({'opcode': 0x12, 'error_opcode': 0x22})  # Invalid chat name
         
         chat_doc = chat_query[0]
         chat_data = chat_doc.to_dict()
         chat_id = chat_doc.id
         
-        # Check if the requester is a member of the chat
-        if requesting_uid not in chat_data.get('members', []):
-            logger.warning(f"User {requesting_uid} attempted to delete message in chat they're not a member of: '{chat_name}'")
-            return jsonify({'opcode': 0x12, 'error_opcode': 0x49})  # Insufficient permissions
-        
         # Try to get the message to delete
         try:
             message_doc = db.collection('chats').document(chat_id).collection('messages').document(message_id).get()
             if not message_doc.exists:
-                logger.warning(f"User {requesting_uid} attempted to delete non-existent message: {message_id}")
+                logger.warning(f"Message ID {message_id} not found for deletion")
                 return jsonify({'opcode': 0x12, 'error_opcode': 0x23})  # Invalid message id
+            
+            message_data = message_doc.to_dict()
         except Exception as e:
-            logger.warning(f"Error retrieving message: {str(e)}")
+            logger.warning(f"Error retrieving message for deletion: {str(e)}")
             return jsonify({'opcode': 0x12, 'error_opcode': 0x23})  # Invalid message id
         
         # Check if user has permission to delete the message
@@ -1276,6 +1265,7 @@ def poke_user():
             if 'blocked_users' in user_prefs_data and user_to_poke_id in user_prefs_data['blocked_users']:
                 logger.warning(f"User {requesting_username} attempted to poke user {username_to_poke} whom they've blocked")
                 return jsonify({'opcode': 0x19, 'error_opcode': 0x39})  # Can't poke blocked user
+        
         target_prefs_ref = db.collection('user_preferences').document(user_to_poke_id)
         target_prefs = target_prefs_ref.get()
         if target_prefs.exists:
@@ -1493,7 +1483,6 @@ def get_roles():
         # Find the chat by name
         chats_ref = db.collection('chats')
         chat_query = chats_ref.where('name', '==', chat_name).limit(1).get()
-        chat_doc = chat_query[0]
         
         if not chat_query or len(chat_query) == 0:
             logger.warning(f"User {requesting_uid} attempted to get roles for non-existent chat: '{chat_name}'")
@@ -1564,34 +1553,45 @@ def generate_invite_link():
             logger.warning(f"User {requesting_uid} attempted to generate invite link but is not the admin of chat: '{chat_name}'")
             return jsonify({'opcode': 0x22, 'error_opcode': 0x49})  # Insufficient permissions
         
-        # Generate random string for the invite link
-        random_str = ''.join(random.choices(string.ascii_letters + string.digits, k=20))
-        invite_link = f"{chat_id}r={random_str}"
+        # Generate a secure completely random token
+        uuid_part = str(uuid.uuid4()).replace('-', '')
+        random_part = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
+        secure_token = f"{uuid_part}{random_part}"
         
-        # Store the invite link in the chat document
-        chat_doc.reference.update({
-            'invite_link': invite_link,
-            'invite_link_created_at': firestore.SERVER_TIMESTAMP
+        # Store the token and chat ID mapping in the database
+        invite_link_ref = db.collection('invite_links').document(secure_token)
+        invite_link_ref.set({
+            'chat_id': chat_id,
+            'created_by': requesting_uid,
+            'created_at': firestore.SERVER_TIMESTAMP
+            # Removed expires_at field that was causing errors
         })
         
-        logger.info(f"User {requesting_uid} generated invite link for chat '{chat_name}'")
-        return jsonify({'opcode': 0x00, 'invite_link': invite_link})
+        # Also store a reference to current valid links in the chat document
+        chat_doc.reference.update({
+            'active_invite_links': firestore.ArrayUnion([secure_token]),
+            'last_invite_link_created_at': firestore.SERVER_TIMESTAMP
+        })
+        
+        logger.info(f"User {requesting_uid} generated secure invite link for chat '{chat_name}'")
+        return jsonify({'opcode': 0x00, 'invite_link': secure_token})
+        
     except Exception as e:
         logger.error(f"Error generating invite link: {str(e)}")
         return jsonify({'opcode': 0x22, 'error_opcode': 0x45})  # Unknown error
 
-# Join Chat with Invite Link Endpoint
 @app.route('/join-chat-by-link', methods=['POST'])
 def join_chat_by_link():
     data = request.json
     auth_token = data.get('authentication_token')
     opcode = data.get('opcode')
-    invite_link = data.get('invite_link')
+    invite_token = data.get('invite_link')
 
-    # Log the received data for debugging
-    logger.info(f"Received join-chat-by-link request with link: {invite_link}")
+    # Log the received data for debugging (mask the token for privacy)
+    token_preview = invite_token[:8] + '...' if invite_token and len(invite_token) > 8 else 'invalid'
+    logger.info(f"Received join-chat-by-link request with token: {token_preview}")
 
-    if opcode != 0x23:  # Using 0x23 as opcode for joining via invite link
+    if opcode != 0x23:
         return jsonify({'opcode': opcode, 'error_opcode': 0x44})  # Unknown opcode
 
     try:
@@ -1604,18 +1604,29 @@ def join_chat_by_link():
         joining_uid = session['uid']
         joining_username = session['username']
         
-        # Parse invite link to get chat ID
-        if not invite_link or 'r=' not in invite_link:
-            logger.warning(f"Invalid invite link format: {invite_link}")
+        # Validate invite token format
+        if not invite_token or len(invite_token) < 32:  # Simple validation for token format
+            logger.warning(f"Invalid invite token format")
             return jsonify({'opcode': 0x23, 'error_opcode': 0x50})  # Invalid link format
         
-        chat_id = invite_link.split('r=')[0]
+        # Look up the invite token in the invite_links collection
+        invite_ref = db.collection('invite_links').document(invite_token)
+        invite_doc = invite_ref.get()
         
+        if not invite_doc.exists:
+            logger.warning(f"User {joining_uid} attempted to join with non-existent invite token")
+            return jsonify({'opcode': 0x23, 'error_opcode': 0x52})  # Invalid invite link
+        
+        invite_data = invite_doc.to_dict()
+        chat_id = invite_data.get('chat_id')
+        
+        # Removed expiration check that was causing errors
+            
         # Find the chat by ID
         try:
             chat_doc = db.collection('chats').document(chat_id).get()
             if not chat_doc.exists:
-                logger.warning(f"User {joining_uid} attempted to join non-existent chat with ID: {chat_id}")
+                logger.warning(f"Chat {chat_id} from invite token does not exist")
                 return jsonify({'opcode': 0x23, 'error_opcode': 0x51})  # Chat not found
         except Exception as e:
             logger.warning(f"Error retrieving chat: {str(e)}")
@@ -1623,10 +1634,10 @@ def join_chat_by_link():
         
         chat_data = chat_doc.to_dict()
         
-        # Verify the invite link is valid
-        stored_invite_link = chat_data.get('invite_link')
-        if not stored_invite_link or stored_invite_link != invite_link:
-            logger.warning(f"User {joining_uid} attempted to join with invalid invite link")
+        # Verify the invite token is still valid/active for this chat
+        active_links = chat_data.get('active_invite_links', [])
+        if invite_token not in active_links:
+            logger.warning(f"Invite token is no longer active for this chat")
             return jsonify({'opcode': 0x23, 'error_opcode': 0x52})  # Invalid invite link
         
         # Check if user is already a member
@@ -1653,11 +1664,12 @@ def join_chat_by_link():
             'timestamp': firestore.SERVER_TIMESTAMP
         })
         
-        logger.info(f"User {joining_username} joined chat {chat_data.get('name')} via invite link")
+        logger.info(f"User {joining_username} joined chat {chat_data.get('name')} via secure invite link")
         return jsonify({
             'opcode': 0x00,
             'chat_name': chat_data.get('name')
         })
+        
     except Exception as e:
         logger.error(f"Error joining chat by link: {str(e)}")
         return jsonify({'opcode': 0x23, 'error_opcode': 0x45})  # Unknown error
@@ -2009,11 +2021,10 @@ def mark_message_as_read():
             if requesting_username not in read_usernames:
                 message_doc.reference.update({
                     'read_by': firestore.ArrayUnion([{
-                        'username': requesting_username,
+                        'username': requesting_username,  # This is already correct
                         'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }])
                 })
-        
         logger.info(f"Message {message_id} marked as read by {requesting_username} in chat: {chat_name}")
         return jsonify({'opcode': 0x20, 'error_opcode': 0x00})
     except Exception as e:

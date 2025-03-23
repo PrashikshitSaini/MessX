@@ -131,6 +131,9 @@ const API = {
   },
 
   async deleteMessage(authToken, chatName, messageId) {
+    console.log(
+      `Sending delete request for message: ${messageId} in chat: ${chatName}`
+    );
     return this.makeRequest("/delete-message", 0x12, authToken, {
       chat_name: chatName,
       message_id: messageId,
