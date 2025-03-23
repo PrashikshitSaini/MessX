@@ -113,6 +113,14 @@ const API = {
     });
   },
 
+  // New method to mark multiple messages as read in a single request
+  async markMessagesAsRead(authToken, chatName, messageIds) {
+    return this.makeRequest("/mark-messages-read", 0x25, authToken, {
+      chat_name: chatName,
+      message_ids: messageIds,
+    });
+  },
+
   // New method to get read receipts for a specific message
   async getReadReceipts(authToken, chatName, messageId) {
     return this.makeRequest("/get-read-receipts", 0x21, authToken, {
@@ -374,6 +382,13 @@ const API = {
       "0x09": {
         "0x16": "User not found",
         "0x45": "Server error while unblocking user",
+      },
+      // Add error messages for batch read receipts
+      "0x25": {
+        "0x17": "Chat not found",
+        "0x20": "Some messages could not be found",
+        "0x49": "You don't have permission to mark messages in this chat",
+        "0x45": "Server error while marking messages as read",
       },
       // General errors
       default: {

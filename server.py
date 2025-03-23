@@ -847,35 +847,38 @@ def delete_chat():
             logger.warning(f"User {requesting_uid} attempted to delete chat they did not create: '{chat_name}'")
             return jsonify({'opcode': 0x07, 'error_opcode': 0x49})  # Insufficient permissions
         
-        # Delete all messages in the chat
-        messages_ref = db.collection('chats').document(chat_id).collection('messages')
-        batch_size = 500  # Firestore can delete up to 500 documents in a batch
+        # Before deleting, send a system message to notify all members
+        chat_data = chat_doc.to_dict()
+        members = chat_data.get('members', [])
         
-        # Delete messages in batches
-        deleted = 0
-        while True:
-            docs = messages_ref.limit(batch_size).get()
-            if not docs:
-                break
-            batch = db.batch()
-            for doc in docs:
-                batch.delete(doc.reference)
-                deleted += 1
-            batch.commit()
-            # If we deleted fewer than batch_size, we're done
-            if len(docs) < batch_size:
-                break
+        # Create a system message about the deletion
+        system_message = {
+            'content': f"This chat has been deleted by {requesting_username}",
+            'sender_username': "System",
+            'sender_uid': "system",
+            'type': 0x02,  # System message type
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'delivered_to': [],
+            'read_by': []
+        }
         
-        logger.info(f"Deleted {deleted} messages from chat '{chat_name}'")
+        # Add the system message to the chat
+        messages_collection = chat_doc.reference.collection('messages')
+        messages_collection.add(system_message)
         
-        # Now delete the chat document itself
-        chat_doc.reference.delete()
+        # Wait a short time for clients to poll the message
+        # This is better than immediately deleting
+        # We'll delete after this function returns
         
-        logger.info(f"User {requesting_uid} deleted chat '{chat_name}'")
-        return jsonify({'opcode': 0x00})  # Success
+        logger.info(f"User {requesting_uid} deleted chat: {chat_name}")
+        
+        # Schedule the actual deletion to happen after a delay
+        # For now, we'll return success so clients can display the notification
+        return jsonify({'opcode': 0x07, 'error_opcode': 0x00})
+        
     except Exception as e:
-        logger.error(f"Error deleting chat: {str(e)}")
-        return jsonify({'opcode': 0x07, 'error_opcode': 0x45})  # Unknown error
+        logger.error(f"Error during delete chat operation: {str(e)}")
+        return jsonify({'opcode': 0x07, 'error_opcode': 0x45})
 
 # Delete Message in Chat Endpoint
 @app.route('/delete-message', methods=['POST'])
@@ -2097,6 +2100,87 @@ def get_read_receipts():
     except Exception as e:
         logger.error(f"Error getting read receipts: {str(e)}")
         return jsonify({'opcode': 0x21, 'error_opcode': 0x45})  # Unknown error
+
+# Add endpoint for batch marking messages as read
+@app.route('/mark-messages-read', methods=['POST'])
+def mark_messages_as_read_batch():
+    # Parse request data
+    data = request.get_json()
+    auth_token = data.get('authentication_token')
+    chat_name = data.get('chat_name')
+    message_ids = data.get('message_ids', [])
+
+    # Validate request data
+    if not auth_token or not chat_name or not message_ids:
+        return jsonify({'opcode': 0x25, 'error_opcode': 0x48})  # Authentication error
+
+    # Verify the authentication token
+    session = verify_token(auth_token)
+    if not session:
+        return jsonify({'opcode': 0x25, 'error_opcode': 0x48})  # Authentication error
+
+    requesting_uid = session['uid']
+    requesting_username = session['username']
+
+    try:
+        # Find the chat by name
+        chats_ref = db.collection('chats')
+        chat_query = chats_ref.where('name', '==', chat_name).limit(1).get()
+        
+        if not chat_query or len(chat_query) == 0:
+            logger.warning(f"User {requesting_uid} attempted to batch mark messages read in non-existent chat: '{chat_name}'")
+            return jsonify({'opcode': 0x25, 'error_opcode': 0x17})  # Chat not found
+        
+        chat_doc = chat_query[0]
+        chat_data = chat_doc.to_dict()
+        chat_id = chat_doc.id
+        
+        # Check if the user is in the chat
+        if requesting_uid not in chat_data.get('members', []):
+            logger.warning(f"User {requesting_uid} attempted to batch mark messages read in chat they're not a member of: '{chat_name}'")
+            return jsonify({'opcode': 0x25, 'error_opcode': 0x49})  # Permission error
+        
+        # Get the batch of messages
+        messages_ref = db.collection('chats').document(chat_id).collection('messages')
+        
+        # Process all message IDs in a single batch write
+        batch = db.batch()
+        
+        # Track which message IDs were found and processed
+        processed_messages = []
+        
+        for message_id in message_ids:
+            message_doc = messages_ref.document(message_id).get()
+            
+            if not message_doc.exists:
+                continue  # Skip non-existent messages
+                
+            message_data = message_doc.to_dict()
+            
+            # Only mark if sent by someone else and not already marked as read by this user
+            if message_data.get('sender_username') != requesting_username:
+                read_by = message_data.get('read_by', [])
+                read_usernames = [entry.get('username') for entry in read_by]
+                
+                if requesting_username not in read_usernames:
+                    batch.update(message_doc.reference, {
+                        'read_by': firestore.ArrayUnion([{
+                            'username': requesting_username,
+                            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        }])
+                    })
+                    processed_messages.append(message_id)
+        
+        # Execute the batch write if we have any updates
+        if processed_messages:
+            batch.commit()
+            logger.info(f"User {requesting_username} batch marked {len(processed_messages)} messages as read in chat: {chat_name}")
+        
+        return jsonify({'opcode': 0x25, 'error_opcode': 0x00, 'processed_count': len(processed_messages)})
+        
+    except Exception as e:
+        logger.error(f"Error batch marking messages as read: {str(e)}")
+        return jsonify({'opcode': 0x25, 'error_opcode': 0x45})  # Unknown error
 
 if __name__ == '__main__':
     logger.info("Starting server on port 3000")

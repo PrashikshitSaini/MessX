@@ -926,3 +926,69 @@ input:invalid {
   color: #999;
   font-size: 0.8rem;
 }
+
+/* Deleted Chat Effect */
+.deleted-chat-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.deleted-chat-message {
+  background-color: white;
+  border-radius: 8px;
+  padding: 30px;
+  width: 90%;
+  max-width: 450px;
+  text-align: center;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  animation: slideIn 0.4s ease-out;
+}
+
+.deleted-chat-message .material-icons {
+  font-size: 48px;
+  color: var(--danger-color);
+  margin-bottom: 15px;
+}
+
+.deleted-chat-message h3 {
+  color: var(--danger-color);
+  margin-bottom: 10px;
+}
+
+.deleted-chat-message p {
+  margin-bottom: 20px;
+  color: var(--text-color);
+}
+
+.deleted-chat-message .btn {
+  min-width: 100px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(-50px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}

@@ -53,9 +53,11 @@ const cancelEditMessageBtn = document.getElementById("cancelEditMessageBtn");
 let currentChat = null;
 let currentMessageId = null;
 let messagePollingInterval = null; // Store interval reference for cleanup
-const POLLING_INTERVAL = 3000; // Poll every 3 seconds
+const POLLING_INTERVAL = 2000; // Poll every 2 seconds instead of 3
 let lastVisibleMessageId = null; // Track the last visible message for read receipts
 const readReceiptsModal = document.getElementById("readReceiptsModal");
+let pendingReadMessages = []; // Cache messages that need to be marked as read
+let lastReadBatchTime = 0; // Track when we last sent a batch of read receipts
 
 // Add this debounce function at the top of the file
 function debounce(func, wait) {
@@ -331,6 +333,40 @@ messagesContainer.parentNode.insertBefore(
   messagesContainer
 );
 
+// New function to batch process read receipts
+async function processPendingReadReceipts() {
+  if (pendingReadMessages.length === 0 || !currentChat || !authToken) return;
+
+  // Only process if we have messages and at least 1 second has passed since the last batch
+  const now = Date.now();
+  if (now - lastReadBatchTime < 1000) return;
+
+  try {
+    // Create a copy of the current pending messages and clear the original array
+    const messagesToProcess = [...pendingReadMessages];
+    pendingReadMessages = [];
+    lastReadBatchTime = now;
+
+    // Make a single API call with all message IDs
+    const data = await API.markMessagesAsRead(
+      authToken,
+      currentChat,
+      messagesToProcess
+    );
+
+    if (data.opcode !== 0x00) {
+      console.error("Error marking messages as read:", data.error_opcode);
+      // If there's an error, we don't add the messages back to the queue
+      // as they'll likely fail again
+    }
+  } catch (error) {
+    console.error("Error processing read receipts:", error);
+  }
+}
+
+// Add a recurring timer to process read receipts
+setInterval(processPendingReadReceipts, 1500); // Process batches every 1.5 seconds
+
 // Utility: load messages for selected chat
 async function loadChatMessages(chatName, scrollToBottom = false) {
   try {
@@ -386,15 +422,24 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
       }
 
-      // Mark all loaded messages as read in a single batch if possible
+      // Add messages to be marked as read to the pending queue instead of sending individual requests
       if (messagesToMarkAsRead.length > 0) {
-        messagesToMarkAsRead.forEach(async (msgId) => {
-          try {
-            await API.markMessageAsRead(authToken, chatName, msgId);
-          } catch (error) {
-            console.error("Error marking message as read", error);
-          }
-        });
+        pendingReadMessages = [...pendingReadMessages, ...messagesToMarkAsRead];
+        // Immediately process if there are many messages
+        if (pendingReadMessages.length > 10) {
+          processPendingReadReceipts();
+        }
+      }
+
+      // Check for deleted chat system message
+      if (data.messages && data.messages.length > 0) {
+        const lastMessage = data.messages[data.messages.length - 1];
+        if (
+          lastMessage.type === 0x02 &&
+          lastMessage.content.includes("This chat has been deleted")
+        ) {
+          showDeletedChatEffect();
+        }
       }
     } else {
       const errorCode = data.error_opcode;
@@ -871,7 +916,7 @@ async function loadChats() {
   }
 }
 
-// Start polling for new messages
+// Start polling for new messages with better handling of changes
 function startMessagePolling(chatName) {
   stopMessagePolling(); // Clear any existing polling
 
@@ -880,15 +925,41 @@ function startMessagePolling(chatName) {
     try {
       const data = await API.getMessages(authToken, currentChat, 20);
       if (data.opcode === 0x00) {
-        // Check if there are new messages or updated read receipts
+        // Get current messages in the DOM
         const currentMessages = Array.from(
           document.querySelectorAll(".message")
         ).map((el) => el.dataset.messageId);
 
+        // Check if there are new messages
         const hasNewMessages = data.messages.some(
           (msg) => !currentMessages.includes(msg.id)
         );
 
+        // Check if any messages were deleted
+        const hasDeletedMessages = currentMessages.some(
+          (id) => !data.messages.find((msg) => msg.id === id)
+        );
+
+        // Check if any messages were edited
+        const hasEditedMessages = data.messages.some((msg) => {
+          const messageEl = document.querySelector(
+            `.message[data-message-id="${msg.id}"]`
+          );
+          if (messageEl) {
+            const contentEl = messageEl.querySelector(".message-content");
+            if (contentEl && contentEl.innerText !== msg.content) {
+              return true;
+            }
+
+            // Also check for pin status changes
+            const isPinnedInDOM = messageEl.classList.contains("pinned");
+            const isPinnedInData = !!msg.pinned;
+            return isPinnedInDOM !== isPinnedInData;
+          }
+          return false;
+        });
+
+        // Check for updated read receipts
         const hasUpdatedReadReceipts = data.messages.some((msg) => {
           const messageEl = document.querySelector(
             `.message[data-message-id="${msg.id}"]`
@@ -919,8 +990,51 @@ function startMessagePolling(chatName) {
           return false;
         });
 
-        // If there are new messages or updated read receipts, reload the chat
-        if (hasNewMessages || hasUpdatedReadReceipts) {
+        // Check if pinned message changed
+        let isPinnedMessageChanged = false;
+        const pinnedMessageContainer = document.getElementById(
+          "pinnedMessagesContainer"
+        );
+        if (data.pinned_message) {
+          // If there's a pinned message in the data
+          if (pinnedMessageContainer.classList.contains("hidden")) {
+            // And no pinned message is displayed
+            isPinnedMessageChanged = true;
+          } else {
+            // Or if the pinned message ID is different
+            const pinnedMsgEl =
+              pinnedMessageContainer.querySelector(".message");
+            if (
+              pinnedMsgEl &&
+              pinnedMsgEl.dataset.messageId !== data.pinned_message.id
+            ) {
+              isPinnedMessageChanged = true;
+            }
+          }
+        } else if (!pinnedMessageContainer.classList.contains("hidden")) {
+          // If there's no pinned message in the data but one is displayed
+          isPinnedMessageChanged = true;
+        }
+
+        // Check for system message about chat deletion
+        const hasChatDeletedMessage = data.messages.some(
+          (msg) =>
+            msg.type === 0x02 &&
+            msg.content.includes("This chat has been deleted")
+        );
+
+        if (hasChatDeletedMessage) {
+          showDeletedChatEffect();
+        }
+
+        // If there are any changes, reload the chat
+        if (
+          hasNewMessages ||
+          hasDeletedMessages ||
+          hasEditedMessages ||
+          hasUpdatedReadReceipts ||
+          isPinnedMessageChanged
+        ) {
           loadChatMessages(currentChat);
         }
       }
@@ -937,6 +1051,50 @@ function stopMessagePolling() {
     messagePollingInterval = null;
     console.log("Stopped message polling");
   }
+}
+
+// Add effect for deleted chat
+function showDeletedChatEffect() {
+  // Create overlay effect
+  const overlay = document.createElement("div");
+  overlay.className = "deleted-chat-overlay";
+
+  // Add the deleted chat message
+  const messageBox = document.createElement("div");
+  messageBox.className = "deleted-chat-message";
+  messageBox.innerHTML = `
+    <span class="material-icons">delete_forever</span>
+    <h3>This chat has been deleted</h3>
+    <p>The chat owner has deleted this conversation.</p>
+    <button class="btn primary close-deleted-chat">OK</button>
+  `;
+
+  overlay.appendChild(messageBox);
+  document.body.appendChild(overlay);
+
+  // Add event listener to close button
+  const closeBtn = overlay.querySelector(".close-deleted-chat");
+  closeBtn.addEventListener("click", () => {
+    document.body.removeChild(overlay);
+
+    // Reset current chat
+    currentChat = null;
+    currentChatName.innerText = "Select a chat";
+    messageInput.disabled = true;
+    sendMessageBtn.disabled = true;
+    pokeBtn.disabled = true;
+
+    // Stop polling and reload the chat list
+    stopMessagePolling();
+    loadChats();
+  });
+
+  // Auto-close after 10 seconds
+  setTimeout(() => {
+    if (document.body.contains(overlay)) {
+      document.body.removeChild(overlay);
+    }
+  }, 10000);
 }
 
 // When a chat item is clicked, select the chat and enable messaging
@@ -1827,11 +1985,10 @@ async function showReadReceipts(messageId) {
   }
 }
 
-// Fix the message scroll handling to use debouncing
+// Fix the message scroll handling to use debouncing with optimized read marking
 const debouncedHandleMessagesScroll = debounce(function () {
   // Find messages that are now visible and mark them as read
   const messages = document.querySelectorAll(".message.incoming");
-  const visibleMessages = new Set(); // Using Set to avoid duplicates
 
   messages.forEach((messageDiv) => {
     const rect = messageDiv.getBoundingClientRect();
@@ -1840,29 +1997,18 @@ const debouncedHandleMessagesScroll = debounce(function () {
     if (isVisible) {
       const messageId = messageDiv.dataset.messageId;
       if (messageId && !messageDiv.classList.contains("read-marked")) {
-        visibleMessages.add(messageId);
-        // Add a class to mark it as read to avoid sending multiple requests
-        messageDiv.classList.add("read-marked");
+        // Add to pending batch instead of making individual API calls
+        if (!pendingReadMessages.includes(messageId)) {
+          pendingReadMessages.push(messageId);
+          // Mark as processed locally
+          messageDiv.classList.add("read-marked");
+        }
       }
     }
   });
 
-  // Mark visible messages as read
-  if (visibleMessages.size > 0) {
-    // Convert Set back to Array for iteration
-    Array.from(visibleMessages).forEach(async (messageId) => {
-      try {
-        await API.markMessageAsRead(authToken, currentChat, messageId);
-      } catch (error) {
-        console.error("Error marking message as read", error);
-      }
-    });
-  }
-}, 500); // Debounce for 500ms
-
-// Update the scroll event listener to use the debounced function
-messagesContainer.removeEventListener("scroll", handleMessagesScroll); // Remove the old listener
-messagesContainer.addEventListener("scroll", debouncedHandleMessagesScroll);
+  // We don't immediately process - the interval timer will handle it
+}, 300); // Reduced to 300ms from 500ms for more responsive marking
 
 // Update generate invite link button handler for improved security
 generateInviteLinkBtn.addEventListener("click", async () => {
@@ -2088,4 +2234,5 @@ document.getElementById("copyInviteLinkBtn").addEventListener("click", () => {
   showToast("Invite link copied to clipboard", "success");
 });
 
-// ...existing code...
+// Add the scroll event listener to handle message visibility
+messagesContainer.addEventListener("scroll", debouncedHandleMessagesScroll);
