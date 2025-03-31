@@ -2184,4 +2184,4 @@ def mark_messages_as_read_batch():
 
 if __name__ == '__main__':
     logger.info("Starting server on port 3000")
-    app.run(host='0.0.0.0', port=3000, threaded=True)  # Enable threading for multiple clients
+    app.run(host='0.0.0.0', port=3000, threaded=True)  # Enable threading for multiple clientsp

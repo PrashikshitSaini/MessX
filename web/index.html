@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Messaging App</title>
     <link rel="stylesheet" href="css/styles.css" />
     <link
@@ -70,7 +73,12 @@
 
         <div class="chat-container">
           <div class="chat-header">
-            <h2 id="currentChatName">Select a chat</h2>
+            <div class="chat-header-top">
+              <button id="toggleSidebarBtn" class="btn icon-btn mobile-only">
+                <span class="material-icons">menu</span>
+              </button>
+              <h2 id="currentChatName">Select a chat</h2>
+            </div>
             <div class="chat-actions">
               <button id="addUserBtn" class="btn icon-btn" title="Add User">
                 <span class="material-icons">person_add</span>

@@ -1,5 +1,6 @@
 const API = {
   BASE_URL: "http://localhost:3000",
+  RENDER_URL: "https://messx.onrender.com",
 
   // Helper method to make authenticated requests
   async makeRequest(endpoint, opcode, authToken, data = {}) {
@@ -88,13 +89,16 @@ const API = {
         }
       }
 
-      const response = await fetch(`${this.BASE_URL}${endpoint}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestData),
-      });
+      const response = await fetch(
+        `${this.BASE_URL || this.RENDER_URL}${endpoint}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestData),
+        }
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP error! Status: ${response.status}`);

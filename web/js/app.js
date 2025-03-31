@@ -75,6 +75,29 @@ function debounce(func, wait) {
 // Initialize buttons from DOM - place this near the top with other DOM elements
 const generateInviteLinkBtn = document.getElementById("generateInviteLinkBtn");
 
+// Add this near the top with your other DOM element references
+const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+
+// Add this near the top with your other DOM element references, after the other elements
+const sidebar = document.querySelector(".sidebar");
+
+// Create an overlay element to detect clicks outside the sidebar
+const sidebarOverlay = document.createElement("div");
+sidebarOverlay.className = "sidebar-overlay";
+document.body.appendChild(sidebarOverlay);
+
+// Add toggle sidebar functionality
+toggleSidebarBtn.addEventListener("click", () => {
+  sidebar.classList.toggle("visible");
+  sidebarOverlay.classList.toggle("visible");
+});
+
+// Close sidebar when clicking on overlay or selecting a chat
+sidebarOverlay.addEventListener("click", () => {
+  sidebar.classList.remove("visible");
+  sidebarOverlay.classList.remove("visible");
+});
+
 // Utility function to show/hide modals
 function openModal(modal) {
   modal.classList.add("active");
@@ -1272,6 +1295,20 @@ chatList.addEventListener("click", (e) => {
 
   // After setting currentChat
   updateChatSettingsForRole();
+
+  // New code - hide sidebar on mobile after selecting a chat
+  if (window.innerWidth <= 576) {
+    sidebar.classList.remove("visible");
+    sidebarOverlay.classList.remove("visible");
+  }
+});
+
+// Check screen size on resize to properly handle sidebar visibility
+window.addEventListener("resize", () => {
+  if (window.innerWidth > 576) {
+    sidebar.classList.remove("visible");
+    sidebarOverlay.classList.remove("visible");
+  }
 });
 
 // Send message button listener

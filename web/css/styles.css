@@ -1148,3 +1148,176 @@ input:invalid {
 .encrypted-message-notice .material-icons {
   font-size: 16px;
 }
+
+/* Add these responsive styles at the end of your CSS file */
+
+/* Tablet Styles (768px and below) */
+@media screen and (max-width: 768px) {
+  .app-container {
+    padding: 10px;
+    height: 100vh;
+    max-width: 100%;
+  }
+
+  .main-container {
+    height: calc(100vh - 20px);
+  }
+
+  .modal-content.wide {
+    width: 90%;
+  }
+
+  .message {
+    max-width: 80%;
+  }
+}
+
+/* Mobile Styles (576px and below) */
+@media screen and (max-width: 576px) {
+  .main-container {
+    flex-direction: column;
+    position: relative;
+  }
+
+  .sidebar {
+    width: 100%;
+    height: auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 10;
+    background: white;
+    transition: transform 0.3s ease;
+    transform: translateX(-100%);
+  }
+
+  .sidebar.visible {
+    transform: translateX(0);
+  }
+
+  .chat-list {
+    max-height: 25vh;
+  }
+
+  .chat-container {
+    height: 100%;
+    width: 100%;
+  }
+
+  .messages-container {
+    max-height: calc(60vh - 130px);
+  }
+
+  .message {
+    max-width: 85%;
+  }
+
+  .message-actions-menu {
+    padding: 8px;
+  }
+
+  .message-actions-menu button {
+    padding: 8px;
+  }
+
+  .btn.icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .invite-link-sharing {
+    flex-direction: column;
+  }
+
+  .modal-content {
+    width: 95%;
+    padding: 15px;
+  }
+
+  .context-menu {
+    width: 200px;
+  }
+
+  /* Make form elements easier to tap */
+  input,
+  select,
+  button {
+    min-height: 44px;
+  }
+
+  /* Show the mobile toggle button */
+  .mobile-only {
+    display: flex;
+  }
+}
+
+/* Very small screens */
+@media screen and (max-width: 360px) {
+  .auth-tabs {
+    flex-direction: column;
+  }
+
+  .message-input-container {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .message-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .btn {
+    padding: 8px 12px;
+  }
+
+  .chat-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .chat-actions {
+    margin-top: 10px;
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+/* Fix for iOS Safari viewport height issue */
+@supports (-webkit-touch-callout: none) {
+  .app-container,
+  .main-container {
+    height: -webkit-fill-available;
+  }
+}
+
+/* Hide mobile-only elements on desktop */
+.mobile-only {
+  display: none;
+}
+
+/* Mobile toggle button styles */
+.chat-header-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Add a semi-transparent overlay when sidebar is visible on mobile */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 5;
+}
+
+.sidebar-overlay.visible {
+  display: block;
+}
