@@ -19,7 +19,14 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 app = Flask(__name__)
-CORS(app, origins=["https://messx.pages.dev", "http://localhost:3000"], supports_credentials=True)  # Enable CORS for specific domains
+# Allow all origins in development, specific origins in production
+if os.environ.get('FLASK_ENV') == 'production':
+    CORS(app, origins=["https://messx.pages.dev", "http://localhost:3000"], 
+         supports_credentials=True, 
+         allow_headers=["Content-Type", "Authorization"],
+         methods=["GET", "POST", "OPTIONS"])
+else:
+    CORS(app, origins="*")  # For development
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
