@@ -19,7 +19,7 @@ firebase_admin.initialize_app(cred)
 db = firestore.client()
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all domains
+CORS(app, origins=["https://messx.pages.dev", "http://localhost:3000"], supports_credentials=True)  # Enable CORS for specific domains
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
