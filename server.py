@@ -13,6 +13,34 @@ import secrets
 import hashlib
 from datetime import datetime  # Fixed duplicate import
 
+# Add after imports:
+import time
+
+# Replace in-memory sessions with better management
+active_sessions = {}  # Keep for backward compatibility
+
+def save_session(token, session_data, expiry_seconds=86400):
+    """Store a session with expiration"""
+    expiry = time.time() + expiry_seconds
+    session_data['expires'] = expiry
+    active_sessions[token] = session_data
+    return session_data
+
+def get_session(token):
+    """Get a session if it exists and isn't expired"""
+    if token not in active_sessions:
+        return None
+    session = active_sessions[token]
+    if time.time() > session.get('expires', 0):
+        del active_sessions[token]
+        return None
+    return session
+
+def delete_session(token):
+    """Remove a session"""
+    if token in active_sessions:
+        del active_sessions[token]
+
 # Initialize Firebase
 cred = credentials.Certificate('creds.json')
 firebase_admin.initialize_app(cred)
@@ -140,16 +168,12 @@ def login():
         # Store a hash of the client nonce with the token for later validation
         client_nonce_hash = hashlib.sha256(raw_client_nonce).hexdigest()
         
-        # Token valid for 24 hours
-        expiry = time.time() + (24 * 60 * 60)
-        
-        # Store the session
-        active_sessions[session_token] = {
+        # Store the session using our new function
+        save_session(session_token, {
             'uid': user.uid,
             'username': username,
-            'expires': expiry,
-            'client_nonce_hash': client_nonce_hash  # Store the client nonce hash
-        }
+            'client_nonce_hash': client_nonce_hash
+        })
         
         logger.info(f"User {username} logged in successfully, secure token created")
         return jsonify({'opcode': 0x01, 'authentication_token': session_token})
@@ -1946,7 +1970,6 @@ def unblock_user():
         user_prefs = user_prefs_ref.get()
         
         if not user_prefs.exists:
-            # No preferences document means no blocked users
             logger.info(f"User {requesting_uid} has no preferences document, nothing to unblock")
             return jsonify({'opcode': 0x00})  # Success (nothing to unblock)
         
@@ -1954,8 +1977,8 @@ def unblock_user():
         
         # Check if blocked_users list exists
         if 'blocked_users' not in user_prefs_data:
-            logger.info(f"User {requesting_uid} has no blocked users list, nothing to unblock")
-            return jsonify({'opcode': 0x00})  # Success (nothing to unblock)
+            logger.info(f"User {requesting_uid} has no blocked users list")
+            return jsonify({'opcode': 0x00})  # Success (no blocked users)
         
         # Check if user is in blocked list
         if user_to_unblock_id not in user_prefs_data['blocked_users']:
