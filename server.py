@@ -11,10 +11,9 @@ import os
 import base64
 import secrets
 import hashlib
-from datetime import datetime  # Fixed duplicate import
 import jwt
-import datetime
-import os
+import datetime as dt  # Rename this import to avoid conflicts
+from datetime import datetime  # Keep this one for datetime.now()
 
 # Set a JWT secret (in production, this should be an environment variable)
 JWT_SECRET = os.environ.get('JWT_SECRET', 'your-secure-random-secret-key')
@@ -27,7 +26,7 @@ def generate_token(user_data):
     payload = {
         'uid': user_data['uid'],
         'username': user_data['username'],
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(days=JWT_EXPIRY_DAYS)
+        'exp': datetime.utcnow() + dt.timedelta(days=JWT_EXPIRY_DAYS)  # Use dt.timedelta here
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -38,7 +37,7 @@ def verify_token(token):
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         
         # Check if token is expired (JWT library will handle this, but we're explicit)
-        now = datetime.datetime.utcnow().timestamp()
+        now = datetime.utcnow().timestamp()
         if payload.get('exp', 0) < now:
             logger.warning(f"Expired token: {token[:10]}...")
             return None
@@ -542,8 +541,7 @@ def send_message_in_chat():
         })
         
         # Delay marking as delivered to ensure the message is fully created
-        # Mark as delivered to the sender immediately after creation
-        now_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Mark as delivered to the sender immediately after creation        now_timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         message_ref.update({
             'delivered_to': firestore.ArrayUnion([{
                 'username': sender_username,
@@ -883,7 +881,7 @@ def delete_chat():
             'sender_username': "System",
             'sender_uid': "system",
             'type': 0x02,  # System message type
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
             'delivered_to': [],
             'read_by': []
         }
@@ -2050,7 +2048,7 @@ def mark_message_as_read():
                 message_doc.reference.update({
                     'read_by': firestore.ArrayUnion([{
                         'username': requesting_username,  # This is already correct
-                        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                     }])
                 })
         logger.info(f"Message {message_id} marked as read by {requesting_username} in chat: {chat_name}")
@@ -2191,7 +2189,7 @@ def mark_messages_as_read_batch():
                     batch.update(message_doc.reference, {
                         'read_by': firestore.ArrayUnion([{
                             'username': requesting_username,
-                            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                         }])
                     })
                     processed_messages.append(message_id)
