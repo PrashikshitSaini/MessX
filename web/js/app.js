@@ -72,6 +72,23 @@ function debounce(func, wait) {
   };
 }
 
+// Add near the top of app.js
+function refreshTokenIfNeeded() {
+  const tokenTimestamp = localStorage.getItem("tokenTimestamp");
+  if (tokenTimestamp) {
+    const now = Date.now();
+    const tokenAge = now - parseInt(tokenTimestamp);
+    // If token is older than 12 hours (43200000 ms), trigger a refresh
+    if (tokenAge > 43200000) {
+      console.log("Token is old, suggesting refresh");
+      showToast(
+        "Your session may have expired. Consider logging in again for best experience.",
+        "warning"
+      );
+    }
+  }
+}
+
 // Initialize buttons from DOM - place this near the top with other DOM elements
 const generateInviteLinkBtn = document.getElementById("generateInviteLinkBtn");
 
@@ -143,8 +160,10 @@ loginForm.addEventListener("submit", async (e) => {
       // Simply store the token directly
       authToken = data.authentication_token;
 
-      // Also store in localStorage as a backup
+      // Also store in localStorage as a backup with timestamp
       localStorage.setItem("authToken", authToken);
+      localStorage.setItem("username", username);
+      localStorage.setItem("tokenTimestamp", Date.now().toString());
 
       currentUsername = username;
       currentUsernameSpan.innerText = username;
@@ -1737,7 +1756,7 @@ document.addEventListener("DOMContentLoaded", () => {
     console.log("Restoring session from saved token");
     authToken = savedToken;
     currentUsername = savedUsername;
-    currentUsernameSpan.innerText = savedUsername;
+    refreshTokenIfNeeded(); // Check token age
 
     // Show main container
     authContainer.classList.add("hidden");
