@@ -336,6 +336,31 @@ const API = {
     return result;
   },
 
+  async refreshToken(currentToken) {
+    try {
+      const response = await fetch(`${this.BASE_URL}/refresh-token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          opcode: 0x03, // Token refresh opcode
+          authentication_token: currentToken,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error(`HTTP error during token refresh: ${response.status}`);
+        return { opcode: 0xff, error_opcode: 0x48 }; // Token error
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Token refresh error:", error);
+      return { opcode: 0xff, error_opcode: 0x45 }; // Server error
+    }
+  },
+
   generateNonce() {
     return AuthUtils.generateSecureNonce();
   },

@@ -73,21 +73,64 @@ function debounce(func, wait) {
 }
 
 // Add near the top of app.js
-function refreshTokenIfNeeded() {
-  const tokenTimestamp = localStorage.getItem("tokenTimestamp");
-  if (tokenTimestamp) {
-    const now = Date.now();
-    const tokenAge = now - parseInt(tokenTimestamp);
-    // If token is older than 12 hours (43200000 ms), trigger a refresh
-    if (tokenAge > 43200000) {
-      console.log("Token is old, suggesting refresh");
-      showToast(
-        "Your session may have expired. Consider logging in again for best experience.",
-        "warning"
-      );
-    }
+let tokenRefreshInterval = null;
+
+function startTokenRefresher() {
+  // Clear any existing interval
+  if (tokenRefreshInterval) {
+    clearInterval(tokenRefreshInterval);
   }
+
+  // Refresh token every 6 hours
+  tokenRefreshInterval = setInterval(async () => {
+    try {
+      if (!authToken) return;
+
+      console.log("Attempting to refresh token...");
+      const result = await API.refreshToken(authToken);
+
+      if (result.opcode === 0x00 && result.new_token) {
+        // Update token
+        authToken = result.new_token;
+        localStorage.setItem("authToken", authToken);
+        localStorage.setItem("tokenTimestamp", Date.now().toString());
+        console.log("Token refreshed successfully");
+      } else {
+        console.error("Failed to refresh token:", result);
+        // If token refresh failed, suggest login
+        showToast(
+          "Your session may have expired. Please log in again.",
+          "warning"
+        );
+      }
+    } catch (error) {
+      console.error("Token refresh error:", error);
+    }
+  }, 6 * 60 * 60 * 1000); // 6 hours
 }
+
+// Add token restoration from localStorage
+document.addEventListener("DOMContentLoaded", () => {
+  const savedToken = localStorage.getItem("authToken");
+  const savedUsername = localStorage.getItem("username");
+
+  if (savedToken && savedUsername) {
+    console.log("Restoring session from saved token");
+    authToken = savedToken;
+    currentUsername = savedUsername;
+    currentUsernameSpan.innerText = savedUsername;
+
+    // Show main container
+    authContainer.classList.add("hidden");
+    mainContainer.classList.remove("hidden");
+
+    // Start token refresher
+    startTokenRefresher();
+
+    // Load chats
+    loadChats();
+  }
+});
 
 // Initialize buttons from DOM - place this near the top with other DOM elements
 const generateInviteLinkBtn = document.getElementById("generateInviteLinkBtn");
@@ -2530,22 +2573,3 @@ document.addEventListener("DOMContentLoaded", () => {
   // Start polling for read receipts
   startReadReceiptProcessing();
 });
-
-// Add this function to periodically refresh the token
-function startTokenRefresher() {
-  setInterval(async () => {
-    try {
-      // Call a new refresh-token endpoint (you'll need to implement this)
-      const response = await API.refreshToken(authToken);
-      if (response.opcode === 0x00 && response.new_token) {
-        // Update token
-        authToken = response.new_token;
-        localStorage.setItem("authToken", authToken);
-        localStorage.setItem("tokenTimestamp", Date.now().toString());
-        console.log("Token refreshed successfully");
-      }
-    } catch (error) {
-      console.error("Token refresh failed:", error);
-    }
-  }, 30 * 60 * 1000); // Refresh every 30 minutes
-}

@@ -12,108 +12,51 @@ import base64
 import secrets
 import hashlib
 from datetime import datetime  # Fixed duplicate import
+import jwt
+import datetime
+import os
 
-# Add after imports:
-import time
+# Set a JWT secret (in production, this should be an environment variable)
+JWT_SECRET = os.environ.get('JWT_SECRET', 'your-secure-random-secret-key')
+JWT_ALGORITHM = 'HS256'
+JWT_EXPIRY_DAYS = 7
 
-# Replace in-memory sessions with better management
-active_sessions = {}  # Keep for backward compatibility
-
-# Replace the in-memory token functions with Firebase-backed versions
-def save_session(token, session_data, expiry_seconds=86400):
-    """Store a session in Firestore with expiration"""
-    expiry = int(time.time() + expiry_seconds)
-    session_data['expires'] = expiry
-    
-    # Store in Firestore
-    try:
-        db.collection('sessions').document(token).set({
-            'data': session_data,
-            'expires': expiry
-        })
-        return session_data
-    except Exception as e:
-        logger.error(f"Error saving session to Firestore: {e}")
-        # Fallback to memory for local development
-        active_sessions[token] = session_data
-        return session_data
-
-def get_session(token):
-    """Get a session from Firestore if it exists and isn't expired"""
-    try:
-        session_doc = db.collection('sessions').document(token).get()
-        if not session_doc.exists:
-            logger.warning(f"Token not found in Firestore: {token[:10]}...")
-            return None
-            
-        session_data = session_doc.to_dict()
-        current_time = time.time()
-        
-        if current_time > session_data.get('expires', 0):
-            logger.warning(f"Expired token in Firestore: {token[:10]}...")
-            # Clean up expired token
-            db.collection('sessions').document(token).delete()
-            return None
-            
-        return session_data.get('data', {})
-    except Exception as e:
-        logger.error(f"Error retrieving session from Firestore: {e}")
-        # Fallback to memory for local development
-        if token in active_sessions:
-            session = active_sessions[token]
-            if time.time() > session.get('expires', 0):
-                del active_sessions[token]
-                return None
-            return session
-        return None
-
-def delete_session(token):
-    """Remove a session from Firestore"""
-    try:
-        db.collection('sessions').document(token).delete()
-    except Exception as e:
-        logger.error(f"Error deleting session from Firestore: {e}")
-        if token in active_sessions:
-            del active_sessions[token]
+# Replace the token management functions with JWT versions
+def generate_token(user_data):
+    """Generate a JWT token for authentication"""
+    payload = {
+        'uid': user_data['uid'],
+        'username': user_data['username'],
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(days=JWT_EXPIRY_DAYS)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def verify_token(token):
-    """Get a session if it exists and isn't expired"""
-    if token not in active_sessions:
-        # In production, try to recover by validating the token structure
-        # instead of rejecting outright
-        if os.environ.get('FLASK_ENV') == 'production':
-            parts = token.split('.')
-            if len(parts) == 3 or len(token) >= 32:  # Basic token format validation
-                # Create a temporary session with minimal permissions
-                logger.warning(f"Attempting to recover invalid token in production")
-                username = extract_username_from_token(token)
-                if username:
-                    user_query = db.collection('users').where('username', '==', username).limit(1).get()
-                    if user_query and len(user_query) > 0:
-                        uid = user_query[0].id
-                        return {'uid': uid, 'username': username}
-        logger.warning(f"Invalid token received: {token[:10]}...")
-        return None
-    
-    session = active_sessions[token]
-    if 'expires' in session and time.time() > session.get('expires', 0):
-        del active_sessions[token]
-        logger.warning(f"Expired token: {token[:10]}...")
-        return None
-    return session
-
-def extract_username_from_token(token):
-    """Try to extract username from token for recovery purposes"""
+    """Verify a JWT token and return the session data"""
     try:
-        # This is a simplified recovery mechanism
-        # In production, you should use proper JWT or similar
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
-        recovery_records = db.collection('token_recovery').where('token_hash', '==', token_hash).limit(1).get()
-        if recovery_records and len(recovery_records) > 0:
-            return recovery_records[0].get('username')
+        # Decode and verify the token
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Check if token is expired (JWT library will handle this, but we're explicit)
+        now = datetime.datetime.utcnow().timestamp()
+        if payload.get('exp', 0) < now:
+            logger.warning(f"Expired token: {token[:10]}...")
+            return None
+            
+        # Return session data similar to your original format
+        return {
+            'uid': payload['uid'],
+            'username': payload['username']
+        }
+    except jwt.ExpiredSignatureError:
+        logger.warning(f"Expired JWT token: {token[:10]}...")
+        return None
+    except jwt.InvalidTokenError:
+        logger.warning(f"Invalid JWT token format: {token[:10]}...")
+        return None
     except Exception as e:
-        logger.error(f"Error in token recovery: {e}")
-    return None
+        logger.error(f"Error verifying token: {str(e)}")
+        return None
 
 # Initialize Firebase
 cred = credentials.Certificate('creds.json')
@@ -183,74 +126,43 @@ def login():
     opcode = data.get('opcode')
     username = data.get('username')
     password_hash = data.get('passwordHash')
-    client_nonce = data.get('clientNonce')
-
+    
     if opcode != 0x00:
         return jsonify({'opcode': opcode, 'error_opcode': 0x44})  # Unknown opcode
 
-    # Validate client nonce
-    if not client_nonce:
-        logger.warning(f"Missing client nonce in login request for user {username}")
-        return jsonify({'opcode': 0x00, 'error_opcode': 0x03})  # Invalid credentials
-
     try:
-        # Decode the client nonce from Base64
-        try:
-            # Try to decode the client nonce
-            raw_client_nonce = base64.b64decode(client_nonce)
-            # Ensure it's exactly 32 bytes
-            if len(raw_client_nonce) != 32:
-                logger.warning(f"Invalid client nonce length in login request for user {username}")
-                return jsonify({'opcode': 0x00, 'error_opcode': 0x03})  # Invalid credentials
-        except:
-            logger.warning(f"Invalid client nonce format in login request for user {username}")
-            return jsonify({'opcode': 0x00, 'error_opcode': 0x03})  # Invalid credentials
-            
         email = f"{username}@example.com"
         
         # First check if the user exists
         try:
             user = auth.get_user_by_email(email)
         except auth.UserNotFoundError:
-            logger.warning(f"Login attempt for non-existent user: {username}")
+            logger.warning(f"Login attempt with non-existent user: {username}")
             return jsonify({'opcode': 0x00, 'error_opcode': 0x03})  # Invalid credentials
-            
-        # Verify the password
-        # Since Firebase doesn't allow direct server-side password verification,
-        # we need to verify against our own stored password hash
         
         # Get the stored password hash from Firestore
         user_doc = db.collection('users').document(user.uid).get()
         if not user_doc.exists:
             logger.warning(f"User {username} exists in Auth but not in Firestore")
             return jsonify({'opcode': 0x00, 'error_opcode': 0x03})  # Invalid credentials
-            
+        
         user_data = user_doc.to_dict()
         stored_password_hash = user_data.get('password_hash')
         
         # If we don't have a stored hash or the provided hash doesn't match
         if not stored_password_hash or stored_password_hash != password_hash:
-            logger.warning(f"Invalid password for user {username}")
+            logger.warning(f"Invalid password for user: {username}")
             return jsonify({'opcode': 0x00, 'error_opcode': 0x03})  # Invalid credentials
         
-        # Generate a secure 32-byte token
-        token_bytes = secrets.token_bytes(32)
-        # Convert to Base64 string for storage and transmission
-        session_token = base64.b64encode(token_bytes).decode('utf-8')
-        
-        # Add additional security by incorporating the client nonce in the token validation
-        # Store a hash of the client nonce with the token for later validation
-        client_nonce_hash = hashlib.sha256(raw_client_nonce).hexdigest()
-        
-        # Store the session using our new function
-        save_session(session_token, {
+        # Generate JWT token
+        token_data = {
             'uid': user.uid,
-            'username': username,
-            'client_nonce_hash': client_nonce_hash
-        })
+            'username': username
+        }
+        jwt_token = generate_token(token_data)
         
-        logger.info(f"User {username} logged in successfully, secure token created")
-        return jsonify({'opcode': 0x01, 'authentication_token': session_token})
+        logger.info(f"User {username} logged in successfully, JWT token created")
+        return jsonify({'opcode': 0x01, 'authentication_token': jwt_token})
     except Exception as e:
         logger.error(f"Error during login: {str(e)}")
         return jsonify({'opcode': 0x00, 'error_opcode': 0x45})  # Unknown error
@@ -400,6 +312,31 @@ def add_user_to_chat():
         
     except Exception as e:
         logger.error(f"Error adding user to chat: {str(e)}")
+        return jsonify({'opcode': 0x03, 'error_opcode': 0x45})  # Unknown error
+
+# Add a new endpoint to refresh tokens
+@app.route('/refresh-token', methods=['POST'])
+def refresh_token():
+    data = request.json
+    current_token = data.get('authentication_token')
+    opcode = data.get('opcode')
+    
+    if opcode != 0x03:  # Token refresh opcode
+        return jsonify({'opcode': opcode, 'error_opcode': 0x44})  # Unknown opcode
+    
+    try:
+        # Verify the current token
+        session = verify_token(current_token)
+        if not session:
+            return jsonify({'opcode': 0x03, 'error_opcode': 0x48})  # Invalid token
+        
+        # Generate a new token
+        new_token = generate_token(session)
+        
+        logger.info(f"Token refreshed for user {session['username']}")
+        return jsonify({'opcode': 0x00, 'new_token': new_token})
+    except Exception as e:
+        logger.error(f"Error refreshing token: {str(e)}")
         return jsonify({'opcode': 0x03, 'error_opcode': 0x45})  # Unknown error
 
 # Remove User from Chat Endpoint
