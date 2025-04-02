@@ -172,6 +172,9 @@ loginForm.addEventListener("submit", async (e) => {
       loadChats();
       showToast(`Welcome back, ${username}!`, "success");
 
+      // Start token refresher
+      startTokenRefresher();
+
       // Check if there's a pending invite link
       const pendingInviteLink = localStorage.getItem("pendingInviteLink");
       if (pendingInviteLink) {
@@ -2527,3 +2530,22 @@ document.addEventListener("DOMContentLoaded", () => {
   // Start polling for read receipts
   startReadReceiptProcessing();
 });
+
+// Add this function to periodically refresh the token
+function startTokenRefresher() {
+  setInterval(async () => {
+    try {
+      // Call a new refresh-token endpoint (you'll need to implement this)
+      const response = await API.refreshToken(authToken);
+      if (response.opcode === 0x00 && response.new_token) {
+        // Update token
+        authToken = response.new_token;
+        localStorage.setItem("authToken", authToken);
+        localStorage.setItem("tokenTimestamp", Date.now().toString());
+        console.log("Token refreshed successfully");
+      }
+    } catch (error) {
+      console.error("Token refresh failed:", error);
+    }
+  }, 30 * 60 * 1000); // Refresh every 30 minutes
+}

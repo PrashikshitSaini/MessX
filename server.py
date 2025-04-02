@@ -19,27 +19,62 @@ import time
 # Replace in-memory sessions with better management
 active_sessions = {}  # Keep for backward compatibility
 
+# Replace the in-memory token functions with Firebase-backed versions
 def save_session(token, session_data, expiry_seconds=86400):
-    """Store a session with expiration"""
-    expiry = time.time() + expiry_seconds
+    """Store a session in Firestore with expiration"""
+    expiry = int(time.time() + expiry_seconds)
     session_data['expires'] = expiry
-    active_sessions[token] = session_data
-    return session_data
+    
+    # Store in Firestore
+    try:
+        db.collection('sessions').document(token).set({
+            'data': session_data,
+            'expires': expiry
+        })
+        return session_data
+    except Exception as e:
+        logger.error(f"Error saving session to Firestore: {e}")
+        # Fallback to memory for local development
+        active_sessions[token] = session_data
+        return session_data
 
 def get_session(token):
-    """Get a session if it exists and isn't expired"""
-    if token not in active_sessions:
+    """Get a session from Firestore if it exists and isn't expired"""
+    try:
+        session_doc = db.collection('sessions').document(token).get()
+        if not session_doc.exists:
+            logger.warning(f"Token not found in Firestore: {token[:10]}...")
+            return None
+            
+        session_data = session_doc.to_dict()
+        current_time = time.time()
+        
+        if current_time > session_data.get('expires', 0):
+            logger.warning(f"Expired token in Firestore: {token[:10]}...")
+            # Clean up expired token
+            db.collection('sessions').document(token).delete()
+            return None
+            
+        return session_data.get('data', {})
+    except Exception as e:
+        logger.error(f"Error retrieving session from Firestore: {e}")
+        # Fallback to memory for local development
+        if token in active_sessions:
+            session = active_sessions[token]
+            if time.time() > session.get('expires', 0):
+                del active_sessions[token]
+                return None
+            return session
         return None
-    session = active_sessions[token]
-    if time.time() > session.get('expires', 0):
-        del active_sessions[token]
-        return None
-    return session
 
 def delete_session(token):
-    """Remove a session"""
-    if token in active_sessions:
-        del active_sessions[token]
+    """Remove a session from Firestore"""
+    try:
+        db.collection('sessions').document(token).delete()
+    except Exception as e:
+        logger.error(f"Error deleting session from Firestore: {e}")
+        if token in active_sessions:
+            del active_sessions[token]
 
 def verify_token(token):
     """Get a session if it exists and isn't expired"""
