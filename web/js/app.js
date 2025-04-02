@@ -359,7 +359,7 @@ registerForm.addEventListener("submit", async (e) => {
       showToast("An unexpected error occurred. Please try again.", "error");
     }
   } catch (error) {
-    console.error("Registration error:", error);
+    console.error("Registration error", error);
     showErrorModal(
       "Connection Error",
       "Failed to connect to the server. Please check your internet connection and try again."
@@ -1811,6 +1811,15 @@ document.addEventListener("DOMContentLoaded", () => {
     // Load chats
     loadChats();
   }
+
+  // Set up the Notion button
+  const notionBtn = document.getElementById("notionBtn");
+  if (notionBtn) {
+    notionBtn.addEventListener("click", function () {
+      // Replace with your actual Notion link
+      window.open("https://www.notion.so", "_blank");
+    });
+  }
 });
 
 // Add a button to the sidebar to manage blocked users
@@ -2572,4 +2581,49 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Start polling for read receipts
   startReadReceiptProcessing();
+});
+
+// Add this function to app.js
+function updateClocks() {
+  const now = new Date();
+
+  // UTC time
+  const utcString = now.toUTCString();
+  const utcTime = utcString.split(" ")[4];
+  document.getElementById("utcClock").textContent = utcTime;
+
+  // IST (Indian Standard Time, UTC+5:30)
+  const istOptions = {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  };
+  document.getElementById("istClock").textContent = now.toLocaleTimeString(
+    "en-US",
+    istOptions
+  );
+
+  // CST (Central Standard Time, UTC-6:00)
+  const cstOptions = {
+    timeZone: "America/Chicago",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  };
+  document.getElementById("cstClock").textContent = now.toLocaleTimeString(
+    "en-US",
+    cstOptions
+  );
+}
+
+// Update the clocks every second
+setInterval(updateClocks, 1000);
+
+// Initialize the clocks when the page loads
+document.addEventListener("DOMContentLoaded", function () {
+  updateClocks();
+  // Your other existing initialization code...
 });

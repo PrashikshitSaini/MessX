@@ -166,6 +166,21 @@ select {
   align-items: center;
 }
 
+.sidebar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#notionBtn {
+  background-color: #ffffff;
+  color: #37352f;
+  border: 1px solid #e0e0e0;
+}
+
+#notionBtn:hover {
+  background-color: #f7f6f3;
+}
+
 .chat-list {
   flex-grow: 1;
   overflow-y: auto;
@@ -1147,6 +1162,36 @@ input:invalid {
 
 .encrypted-message-notice .material-icons {
   font-size: 16px;
+}
+
+/* Time Clocks */
+.time-clocks {
+  background-color: var(--primary-light);
+  padding: 8px;
+  border-radius: 4px;
+  margin-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-size: 12px;
+}
+
+.time-clock {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.time-clock:last-child {
+  margin-bottom: 0;
+}
+
+.time-label {
+  font-weight: 500;
+  color: var(--primary-dark);
+}
+
+.clock-time {
+  font-family: monospace;
+  color: var(--text-color);
 }
 
 /* Add these responsive styles at the end of your CSS file */

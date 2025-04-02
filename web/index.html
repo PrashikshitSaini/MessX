@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+      content="width=device-width, maximum-scale=1.0, user-scalable=no"
     />
     <title>Messaging App</title>
     <link rel="stylesheet" href="css/styles.css" />
@@ -58,9 +58,18 @@
         <div class="sidebar">
           <div class="sidebar-header">
             <h2>Chats</h2>
-            <button id="createChatBtn" class="btn icon-btn">
-              <span class="material-icons">add</span>
-            </button>
+            <div class="sidebar-actions">
+              <button id="notionBtn" class="btn icon-btn" title="Go to Notion">
+                <span class="material-icons">description</span>
+              </button>
+              <button
+                id="createChatBtn"
+                class="btn icon-btn"
+                title="Create New Chat"
+              >
+                <span class="material-icons">add</span>
+              </button>
+            </div>
           </div>
           <div class="chat-list" id="chatList">
             <!-- Chat list will be populated here -->
@@ -68,6 +77,20 @@
           <div class="user-info">
             <span id="currentUsername">Username</span>
             <button id="logoutBtn" class="btn secondary small">Logout</button>
+          </div>
+          <div class="time-clocks">
+            <div class="time-clock">
+              <span class="time-label">UTC:</span>
+              <span id="utcClock" class="clock-time">--:--:--</span>
+            </div>
+            <div class="time-clock">
+              <span class="time-label">IST:</span>
+              <span id="istClock" class="clock-time">--:--:--</span>
+            </div>
+            <div class="time-clock">
+              <span class="time-label">CST:</span>
+              <span id="cstClock" class="clock-time">--:--:--</span>
+            </div>
           </div>
         </div>
 
