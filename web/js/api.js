@@ -9,85 +9,53 @@ const API = {
       const includeAuth = opcode !== 0x00 && opcode !== 0x01;
       const token = includeAuth ? authToken : null;
 
-      // We're still using JSON for transmission in this implementation
-      // In a real binary protocol implementation, we would use Protocol.createPacket
-      // and transmit binary data instead
+      // Simplify request data structure
+      const requestData = {
+        opcode: opcode,
+        ...data,
+      };
 
-      // Validate auth token format if we're including it
-      if (token && !AuthUtils.validateTokenFormat(token)) {
-        console.error("Invalid authentication token format");
-        throw new Error("Invalid authentication token");
+      if (includeAuth && token) {
+        requestData.authentication_token = token;
       }
 
-      const requestData = { opcode, ...data };
-
-      // Add authentication token if needed
-      if (includeAuth) {
-        requestData.authentication_token = authToken;
-      }
-
-      // Encrypt sensitive data if needed (for messages and other sensitive operations)
+      // In your makeRequest method, comment out or disable encryption:
       if (opcode === 0x10) {
-        // Send message opcode
-        try {
-          // If we're sending a message, encrypt it
-          const userKeys = await AuthUtils.getUserKeys();
+        // Send message opcode - ENCRYPTION DISABLED
+        requestData.message = data.message;
+        requestData.is_encrypted = false;
 
+        /* Original encryption code commented out
+        try {
+          const userKeys = await AuthUtils.getUserKeys();
           if (userKeys) {
-            // For group chats, we would need to encrypt for each recipient
-            // For this example, we'll just encrypt with the sender's own public key
-            // In a real implementation, we would encrypt for each recipient in the chat
             const encryptedMessage = await CryptoUtils.encryptMessage(
               data.message,
               userKeys.publicKey
             );
-
-            // Replace the plaintext message with encrypted data
             requestData.message = JSON.stringify(encryptedMessage);
             requestData.is_encrypted = true;
           } else {
-            console.warn(
-              "No encryption keys available, sending message in plaintext"
-            );
-            // Still send the message, but unencrypted
             requestData.message = data.message;
             requestData.is_encrypted = false;
           }
         } catch (error) {
           console.error("Error encrypting message:", error);
-          // Fallback to unencrypted message if encryption fails
           requestData.message = data.message;
           requestData.is_encrypted = false;
         }
+        */
       }
 
-      // Handle edit message encryption as well
+      // And similarly for message editing:
       if (opcode === 0x11 && data.updated_message) {
-        try {
-          const userKeys = await AuthUtils.getUserKeys();
-
-          if (userKeys) {
-            const encryptedMessage = await CryptoUtils.encryptMessage(
-              data.updated_message,
-              userKeys.publicKey
-            );
-
-            // Replace the plaintext message with encrypted data
-            requestData.updated_message = JSON.stringify(encryptedMessage);
-            requestData.is_encrypted = true;
-          } else {
-            console.warn(
-              "No encryption keys available, sending edited message in plaintext"
-            );
-            requestData.updated_message = data.updated_message;
-            requestData.is_encrypted = false;
-          }
-        } catch (error) {
-          console.error("Error encrypting edited message:", error);
-          requestData.updated_message = data.updated_message;
-          requestData.is_encrypted = false;
-        }
+        requestData.updated_message = data.updated_message;
+        requestData.is_encrypted = false;
       }
+
+      console.log(
+        `Making request to ${endpoint} with opcode ${opcode.toString(16)}`
+      );
 
       const response = await fetch(`${this.BASE_URL}${endpoint}`, {
         method: "POST",
@@ -98,50 +66,18 @@ const API = {
       });
 
       if (!response.ok) {
+        console.error(`HTTP error: ${response.status}`);
         throw new Error(`HTTP error! Status: ${response.status}`);
       }
 
-      const responseData = await response.json();
-
-      // Decrypt message data if needed
-      if (responseData.messages && Array.isArray(responseData.messages)) {
-        try {
-          const userKeys = await AuthUtils.getUserKeys();
-          if (userKeys) {
-            // Process each message to decrypt if necessary
-            for (let i = 0; i < responseData.messages.length; i++) {
-              const msg = responseData.messages[i];
-              if (msg.is_encrypted && msg.content) {
-                try {
-                  // Parse the encrypted content
-                  const encryptedPackage = JSON.parse(msg.content);
-                  // Decrypt the message
-                  const decryptedContent = await CryptoUtils.decryptMessage(
-                    encryptedPackage,
-                    userKeys.privateKey
-                  );
-                  // Replace with decrypted content
-                  responseData.messages[i].content = decryptedContent;
-                  responseData.messages[i].is_encrypted = false;
-                } catch (error) {
-                  console.error("Error decrypting message:", error);
-                  // Keep encrypted message as is if decryption fails
-                  responseData.messages[i].content =
-                    "[Encrypted message - cannot decrypt]";
-                }
-              }
-            }
-          }
-        } catch (error) {
-          console.error("Error processing message decryption:", error);
-          // Continue without decrypting if there's an error
-        }
-      }
-
-      return responseData;
+      return await response.json();
     } catch (error) {
       console.error("API request error:", error);
-      return { opcode: 0xff, error_message: error.toString() };
+      return {
+        opcode: 0xff,
+        error_opcode: 0x45,
+        error_message: error.toString(),
+      };
     }
   },
 

@@ -137,35 +137,32 @@ loginForm.addEventListener("submit", async (e) => {
     const passwordHash = await sha256(password);
     const data = await API.login(username, passwordHash);
 
-    console.log("Login response:", data); // For debugging
+    console.log("Login response:", data); // Debug logging
 
-    // Directly check for successful login (opcode 0x01)
     if (data.opcode === 0x01 && data.authentication_token) {
-      // Validate and securely store the authentication token
-      const validToken = AuthUtils.storeToken(data.authentication_token);
-      if (!validToken) {
-        showErrorModal(
-          "Authentication Error",
-          "Server returned an invalid authentication token format."
-        );
-        return;
-      }
-
-      // Store the valid token
+      // Simply store the token directly
       authToken = data.authentication_token;
+
+      // Also store in localStorage as a backup
+      localStorage.setItem("authToken", authToken);
+
       currentUsername = username;
       currentUsernameSpan.innerText = username;
       authContainer.classList.add("hidden");
       mainContainer.classList.remove("hidden");
-      loadChats(); // Load chats after login
+      loadChats();
       showToast(`Welcome back, ${username}!`, "success");
 
       // Check if there's a pending invite link
       const pendingInviteLink = localStorage.getItem("pendingInviteLink");
       if (pendingInviteLink) {
-        showToast("Joining chat via invite link...", "info");
-        joinChatViaInviteLink(pendingInviteLink);
-        localStorage.removeItem("pendingInviteLink");
+        // Process the invite link
+        try {
+          await joinChatViaInviteLink(pendingInviteLink);
+          localStorage.removeItem("pendingInviteLink");
+        } catch (error) {
+          console.error("Error processing invite link:", error);
+        }
       }
     } else if (data.error_opcode) {
       // Handle specific error cases
@@ -1730,6 +1727,24 @@ document.addEventListener("DOMContentLoaded", () => {
     document.querySelector(".auth-container").prepend(inviteBanner);
     // Clean URL to remove the invite parameter
     window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
+  // Try to restore session from localStorage
+  const savedToken = localStorage.getItem("authToken");
+  const savedUsername = localStorage.getItem("username");
+
+  if (savedToken && savedUsername) {
+    console.log("Restoring session from saved token");
+    authToken = savedToken;
+    currentUsername = savedUsername;
+    currentUsernameSpan.innerText = savedUsername;
+
+    // Show main container
+    authContainer.classList.add("hidden");
+    mainContainer.classList.remove("hidden");
+
+    // Load chats
+    loadChats();
   }
 });
 
