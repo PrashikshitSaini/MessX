@@ -1264,83 +1264,55 @@ input:invalid {
 
 /* Mobile Styles (576px and below) */
 @media screen and (max-width: 576px) {
-  .main-container {
-    flex-direction: column;
-    position: relative;
+  .app-container {
+    padding: 10px;
   }
 
   .sidebar {
-    width: 100%;
-    height: auto;
-    max-height: 40vh;
-    border-right: none;
-    border-bottom: 1px solid var(--border-color);
-    position: absolute;
+    position: fixed;
+    left: -100%;
     top: 0;
-    left: 0;
-    z-index: 10;
-    background: white;
-    transition: transform 0.3s ease;
-    transform: translateX(-100%);
+    bottom: 0;
+    width: 80%;
+    max-width: 300px;
+    z-index: 1000;
+    transition: left 0.3s ease;
+    background-color: white;
   }
 
   .sidebar.visible {
-    transform: translateX(0);
+    left: 0;
   }
 
-  .chat-list {
-    max-height: 25vh;
+  .main-container {
+    height: calc(100vh - 20px);
   }
 
   .chat-container {
-    height: 100%;
     width: 100%;
   }
 
   .messages-container {
     max-height: calc(60vh - 130px);
+    flex-direction: column !important; /* Force same direction as desktop */
   }
 
-  .message {
-    max-width: 85%;
+  .message-input-container {
+    padding: 10px;
   }
 
-  .message-actions-menu {
-    padding: 8px;
-  }
-
-  .message-actions-menu button {
-    padding: 8px;
-  }
-
-  .btn.icon-btn {
-    width: 40px;
-    height: 40px;
-  }
-
-  .invite-link-sharing {
-    flex-direction: column;
+  .message-input-container input {
+    font-size: 16px;
   }
 
   .modal-content {
-    width: 95%;
-    padding: 15px;
+    width: 90%;
+    max-width: 350px;
   }
 
-  .context-menu {
-    width: 200px;
-  }
-
-  /* Make form elements easier to tap */
-  input,
-  select,
-  button {
-    min-height: 44px;
-  }
-
-  /* Show the mobile toggle button */
-  .mobile-only {
-    display: flex;
+  .auth-container {
+    margin: 20px auto;
+    width: 90%;
   }
 }
 

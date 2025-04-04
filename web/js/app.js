@@ -567,15 +567,8 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
         messagesContainer.scrollHeight - messagesContainer.scrollTop ===
           messagesContainer.clientHeight;
 
-      // Clear containers
-      pinnedMessagesContainer.innerHTML = "";
-      messagesContainer.innerHTML = "";
-
-      // Handle case when there are no messages
-      if (!data.messages || data.messages.length === 0) {
-        messagesContainer.innerHTML = `<div class="empty-state">No messages yet</div>`;
-        return;
-      }
+      // Render messages using the new function
+      renderMessages(data.messages);
 
       // Display pinned message (if any)
       if (data.pinned_message) {
@@ -591,36 +584,17 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
         pinnedMessagesContainer.classList.add("hidden");
       }
 
-      // Display regular messages
+      // Add messages to be marked as read to the pending queue instead of sending individual requests
       const messagesToMarkAsRead = [];
-
-      // Reverse messages to show in chronological order (oldest first)
-      const chronologicalMessages = [...data.messages].reverse();
-
-      // Add the "Load More" button if there are likely more messages to load
-      if (chronologicalMessages.length >= currentMessageLimit) {
-        const loadMoreBtn = createLoadMoreButton();
-        messagesContainer.appendChild(loadMoreBtn);
-      }
-
-      // Display messages in chronological order
-      chronologicalMessages.forEach((msg) => {
+      data.messages.forEach((msg) => {
         if (
           msg.sender !== currentUsername &&
           !msg.read_by?.find((entry) => entry.username === currentUsername)
         ) {
           messagesToMarkAsRead.push(msg.id);
         }
-        const div = createMessageElement(msg);
-        messagesContainer.appendChild(div);
       });
 
-      // Auto-scroll to bottom for new messages if previously at bottom
-      if (shouldScrollToBottom) {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-      }
-
-      // Add messages to be marked as read to the pending queue instead of sending individual requests
       if (messagesToMarkAsRead.length > 0) {
         pendingReadMessages = [...pendingReadMessages, ...messagesToMarkAsRead];
         // Immediately process if there are many messages
@@ -2730,4 +2704,24 @@ function createLoadMoreButton() {
   loadMoreBtn.innerHTML = "Load More Messages";
   loadMoreBtn.addEventListener("click", loadMoreMessages);
   return loadMoreBtn;
+}
+
+// New function to render messages
+function renderMessages(messages) {
+  // Clear existing messages first
+  messagesContainer.innerHTML = "";
+
+  // Always add a load more button at the top if needed
+  if (messages.length >= currentMessageLimit) {
+    messagesContainer.appendChild(createLoadMoreButton());
+  }
+
+  // Add messages in chronological order (oldest first)
+  messages.forEach((msg) => {
+    const messageElement = createMessageElement(msg);
+    messagesContainer.appendChild(messageElement);
+  });
+
+  // Scroll to bottom to show newest messages
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
