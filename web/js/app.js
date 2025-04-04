@@ -549,7 +549,7 @@ async function processPendingReadReceipts() {
 // Add a recurring timer to process read receipts
 setInterval(processPendingReadReceipts, 1500); // Process batches every 1.5 seconds
 
-// Replace the loadChatMessages function to use the new renderMessages
+// Update loadChatMessages to properly pass the scroll parameter
 async function loadChatMessages(chatName, scrollToBottom = false) {
   try {
     // Reset message limit when loading a new chat
@@ -567,15 +567,13 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
     if (data.opcode === 0x00) {
       const messages = data.messages || [];
 
-      // No need to sort here, renderMessages will handle it
-
       if (messages.length === 0) {
         messagesContainer.innerHTML = `
           <div class="empty-state">
             <p>No messages yet. Start the conversation!</p>
           </div>`;
       } else {
-        // Use the updated renderMessages function for consistent ordering
+        // Use the updated renderMessages function with correct scrollToBottom parameter
         renderMessages(messages, scrollToBottom);
 
         // Update last visible message for read receipts
@@ -608,7 +606,6 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
       </div>`;
   }
 }
-
 // Replace the renderMessages function with this consistent implementation
 function renderMessages(messages) {
   // Clear existing messages first
@@ -1156,6 +1153,7 @@ async function loadChats() {
 }
 
 // Update the polling function to use renderMessages
+// Update the polling function to use renderMessages correctly
 function startMessagePolling(chatName) {
   stopMessagePolling(); // Clear any existing polling
 
@@ -1191,7 +1189,7 @@ function startMessagePolling(chatName) {
             messagesContainer.scrollHeight - messagesContainer.scrollTop <=
             messagesContainer.clientHeight + 50;
 
-          // Render with the updated messages
+          // Render with the updated messages - scroll to bottom only if we were already at bottom
           renderMessages(messages, isAtBottom);
 
           // Check for new pinned message
@@ -1211,7 +1209,6 @@ function startMessagePolling(chatName) {
     }
   }, POLLING_INTERVAL);
 }
-
 // Stop polling for messages
 function stopMessagePolling() {
   if (messagePollingInterval) {
@@ -1305,27 +1302,32 @@ window.addEventListener("resize", () => {
 });
 
 // Send message button listener
+// Update send message button listener
 sendMessageBtn.addEventListener("click", async () => {
   const chatName = currentChatName.innerText;
   const message = messageInput.value.trim();
 
   if (!message) {
-    showToast("Message cannot be empty", "error");
-    return;
+    return; // Don't send empty messages
   }
 
   try {
+    // Show optimistic UI update
+    messageInput.value = "";
+
+    // Send the message
     const data = await API.sendMessage(authToken, chatName, message);
-    if (handleApiError(data)) {
-      messageInput.value = "";
-      loadChatMessages(chatName, true);
+
+    if (data.opcode === 0x00) {
+      // Message sent successfully, reload chat messages and scroll to bottom
+      await loadChatMessages(chatName, true); // true = scroll to bottom
+    } else {
+      // Handle API error
+      showToast(API.getErrorMessage(0x10, data.error_opcode), "error");
     }
   } catch (error) {
     console.error("Send message error", error);
-    showErrorModal(
-      "Connection Error",
-      "Failed to send message. Please check your connection and try again."
-    );
+    showToast("Failed to send message. Please try again.", "error");
   }
 });
 
