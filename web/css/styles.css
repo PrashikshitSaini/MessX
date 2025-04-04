@@ -1194,6 +1194,51 @@ input:invalid {
   color: var(--text-color);
 }
 
+/* Load More Button Styles */
+.load-more-btn {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  margin: 10px 0;
+  text-align: center;
+  background-color: var(--primary-light);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.load-more-btn:hover {
+  background-color: var(--primary-color);
+  color: white;
+}
+
+.load-more-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
 /* Add these responsive styles at the end of your CSS file */
 
 /* Tablet Styles (768px and below) */

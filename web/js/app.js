@@ -552,7 +552,14 @@ setInterval(processPendingReadReceipts, 1500); // Process batches every 1.5 seco
 // Utility: load messages for selected chat
 async function loadChatMessages(chatName, scrollToBottom = false) {
   try {
-    const data = await API.getMessages(authToken, chatName, 20);
+    // Reset message limit when loading a new chat
+    currentMessageLimit = MESSAGE_BATCH_SIZE;
+
+    const data = await API.getMessages(
+      authToken,
+      chatName,
+      currentMessageLimit
+    );
     if (data.opcode === 0x00) {
       // Capture scroll position to maintain it unless we want to scroll to bottom
       const shouldScrollToBottom =
@@ -589,6 +596,12 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
 
       // Reverse messages to show in chronological order (oldest first)
       const chronologicalMessages = [...data.messages].reverse();
+
+      // Add the "Load More" button if there are likely more messages to load
+      if (chronologicalMessages.length >= currentMessageLimit) {
+        const loadMoreBtn = createLoadMoreButton();
+        messagesContainer.appendChild(loadMoreBtn);
+      }
 
       // Display messages in chronological order
       chronologicalMessages.forEach((msg) => {
@@ -2630,3 +2643,91 @@ document.addEventListener("DOMContentLoaded", function () {
   updateClocks();
   // Your other existing initialization code...
 });
+
+// Add these variables near the top with other globals
+let currentMessageLimit = 20; // Initial message load count
+const MESSAGE_BATCH_SIZE = 20; // How many more messages to load each time
+
+// New function to handle loading more messages
+async function loadMoreMessages() {
+  if (!currentChat) return;
+
+  // Update button to show loading state
+  const loadMoreBtn = document.getElementById("loadMoreMessagesBtn");
+  if (loadMoreBtn) {
+    loadMoreBtn.innerHTML = '<span class="loading-spinner"></span> Loading...';
+    loadMoreBtn.disabled = true;
+  }
+
+  // Store current scroll position and height
+  const scrollPos = messagesContainer.scrollTop;
+  const oldHeight = messagesContainer.scrollHeight;
+
+  // Increase the message limit
+  currentMessageLimit += MESSAGE_BATCH_SIZE;
+
+  try {
+    const data = await API.getMessages(
+      authToken,
+      currentChat,
+      currentMessageLimit
+    );
+
+    if (data.opcode === 0x00) {
+      // Clear existing messages container
+      messagesContainer.innerHTML = "";
+
+      // Handle case when there are no messages
+      if (!data.messages || data.messages.length === 0) {
+        messagesContainer.innerHTML = `<div class="empty-state">No messages yet</div>`;
+        return;
+      }
+
+      // Reverse messages to show in chronological order (oldest first)
+      const chronologicalMessages = [...data.messages].reverse();
+
+      // Add the "Load More" button if there are likely more messages
+      if (chronologicalMessages.length >= currentMessageLimit) {
+        const newLoadMoreBtn = createLoadMoreButton();
+        messagesContainer.appendChild(newLoadMoreBtn);
+      }
+
+      // Display messages
+      const messagesToMarkAsRead = [];
+      chronologicalMessages.forEach((msg) => {
+        if (
+          msg.sender !== currentUsername &&
+          !msg.read_by?.find((entry) => entry.username === currentUsername)
+        ) {
+          messagesToMarkAsRead.push(msg.id);
+        }
+        const div = createMessageElement(msg);
+        messagesContainer.appendChild(div);
+      });
+
+      // Add messages to be marked as read to the pending queue
+      if (messagesToMarkAsRead.length > 0) {
+        pendingReadMessages = [...pendingReadMessages, ...messagesToMarkAsRead];
+      }
+
+      // Restore scroll position approximately where user was before
+      const newHeight = messagesContainer.scrollHeight;
+      messagesContainer.scrollTop = scrollPos + (newHeight - oldHeight);
+    } else {
+      handleApiError(data, "Failed to load more messages");
+    }
+  } catch (error) {
+    console.error("Error loading more messages", error);
+    showToast("Failed to load more messages. Check your connection.", "error");
+  }
+}
+
+// Function to create the Load More button
+function createLoadMoreButton() {
+  const loadMoreBtn = document.createElement("button");
+  loadMoreBtn.id = "loadMoreMessagesBtn";
+  loadMoreBtn.className = "btn load-more-btn";
+  loadMoreBtn.innerHTML = "Load More Messages";
+  loadMoreBtn.addEventListener("click", loadMoreMessages);
+  return loadMoreBtn;
+}
