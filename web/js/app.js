@@ -549,83 +549,94 @@ async function processPendingReadReceipts() {
 // Add a recurring timer to process read receipts
 setInterval(processPendingReadReceipts, 1500); // Process batches every 1.5 seconds
 
-// Utility: load messages for selected chat
+// Replace the loadChatMessages function to use the new renderMessages
 async function loadChatMessages(chatName, scrollToBottom = false) {
   try {
     // Reset message limit when loading a new chat
     currentMessageLimit = MESSAGE_BATCH_SIZE;
+
+    messagesContainer.innerHTML =
+      '<div class="loading">Loading messages...</div>';
 
     const data = await API.getMessages(
       authToken,
       chatName,
       currentMessageLimit
     );
+
     if (data.opcode === 0x00) {
-      // Capture scroll position to maintain it unless we want to scroll to bottom
-      const shouldScrollToBottom =
-        scrollToBottom ||
-        messagesContainer.scrollHeight - messagesContainer.scrollTop ===
-          messagesContainer.clientHeight;
+      const messages = data.messages || [];
 
-      // Render messages using the new function
-      renderMessages(data.messages);
+      // No need to sort here, renderMessages will handle it
 
-      // Display pinned message (if any)
-      if (data.pinned_message) {
-        const pinnedHeader = document.createElement("div");
-        pinnedHeader.className = "pinned-header";
-        pinnedHeader.innerHTML = `<span class="material-icons">push_pin</span> Pinned Message`;
-        pinnedMessagesContainer.appendChild(pinnedHeader);
-
-        const pinnedMsg = createMessageElement(data.pinned_message, true);
-        pinnedMessagesContainer.appendChild(pinnedMsg);
-        pinnedMessagesContainer.classList.remove("hidden");
+      if (messages.length === 0) {
+        messagesContainer.innerHTML = `
+          <div class="empty-state">
+            <p>No messages yet. Start the conversation!</p>
+          </div>`;
       } else {
-        pinnedMessagesContainer.classList.add("hidden");
-      }
+        // Use the updated renderMessages function for consistent ordering
+        renderMessages(messages, scrollToBottom);
 
-      // Add messages to be marked as read to the pending queue instead of sending individual requests
-      const messagesToMarkAsRead = [];
-      data.messages.forEach((msg) => {
-        if (
-          msg.sender !== currentUsername &&
-          !msg.read_by?.find((entry) => entry.username === currentUsername)
-        ) {
-          messagesToMarkAsRead.push(msg.id);
-        }
-      });
-
-      if (messagesToMarkAsRead.length > 0) {
-        pendingReadMessages = [...pendingReadMessages, ...messagesToMarkAsRead];
-        // Immediately process if there are many messages
-        if (pendingReadMessages.length > 10) {
-          processPendingReadReceipts();
+        // Update last visible message for read receipts
+        if (messages.length > 0) {
+          lastVisibleMessageId = messages[messages.length - 1].message_id;
         }
       }
 
-      // Check for deleted chat system message
-      if (data.messages && data.messages.length > 0) {
-        const lastMessage = data.messages[data.messages.length - 1];
-        if (
-          lastMessage.type === 0x02 &&
-          lastMessage.content.includes("This chat has been deleted")
-        ) {
-          showDeletedChatEffect();
-        }
+      // Display pinned message if exists
+      if (data.pinned_message) {
+        displayPinnedMessage(data.pinned_message);
+      } else {
+        hidePinnedMessage();
       }
     } else {
-      const errorCode = data.error_opcode;
-      if (errorCode === 0x17) {
-        alert("Chat doesn't exist");
-      } else if (errorCode === 0x49) {
-        alert("You don't have permission to view this chat");
-      } else {
-        alert(`Error loading messages: code ${errorCode}`);
-      }
+      // Handle API error
+      messagesContainer.innerHTML = `
+        <div class="error-state">
+          <p>Failed to load messages. ${API.getErrorMessage(
+            0x11,
+            data.error_opcode
+          )}</p>
+        </div>`;
     }
   } catch (error) {
     console.error("Error loading messages", error);
-    alert("Failed to load messages. Check your connection.");
+    messagesContainer.innerHTML = `
+      <div class="error-state">
+        <p>Error loading messages: ${error.message}</p>
+      </div>`;
+  }
+}
+
+// Replace the renderMessages function with this consistent implementation
+function renderMessages(messages) {
+  // Clear existing messages first
+  messagesContainer.innerHTML = "";
+
+  // If we have enough messages to warrant a "load more" button
+  if (messages.length >= currentMessageLimit) {
+    // Add a load more button at the top
+    messagesContainer.appendChild(createLoadMoreButton());
+  }
+
+  // Sort messages chronologically (oldest first)
+  // This ensures consistent order regardless of how they come from the API
+  messages.sort((a, b) => {
+    const timeA = new Date(a.timestamp);
+    const timeB = new Date(b.timestamp);
+    return timeA - timeB; // Ascending order (oldest first)
+  });
+
+  // Add messages in chronological order (oldest first, newest last)
+  messages.forEach((msg) => {
+    const messageElement = createMessageElement(msg);
+    messagesContainer.appendChild(messageElement);
+  });
+
+  // Scroll to bottom to show newest messages
+  if (scrollToBottom) {
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 }
 
@@ -1144,129 +1155,59 @@ async function loadChats() {
   }
 }
 
-// Start polling for new messages with better handling of changes
+// Update the polling function to use renderMessages
 function startMessagePolling(chatName) {
   stopMessagePolling(); // Clear any existing polling
+
   messagePollingInterval = setInterval(async () => {
-    if (!currentChat) return;
     try {
-      const data = await API.getMessages(authToken, currentChat, 20);
+      if (!currentChat) return;
+
+      const data = await API.getMessages(
+        authToken,
+        currentChat,
+        currentMessageLimit
+      );
+
       if (data.opcode === 0x00) {
-        // Get current messages in the DOM
-        const currentMessages = Array.from(
+        const messages = data.messages || [];
+
+        // Get the currently displayed messages
+        const currentMessageIds = Array.from(
           document.querySelectorAll(".message")
         ).map((el) => el.dataset.messageId);
 
-        // Check if there are new messages
-        const hasNewMessages = data.messages.some(
-          (msg) => !currentMessages.includes(msg.id)
-        );
-
-        // Check if any messages were deleted
-        const hasDeletedMessages = currentMessages.some(
-          (id) => !data.messages.find((msg) => msg.id === id)
-        );
-
-        // Check if any messages were edited
-        const hasEditedMessages = data.messages.some((msg) => {
-          const messageEl = document.querySelector(
-            `.message[data-message-id="${msg.id}"]`
+        // Check if messages have changed
+        const messageChanged =
+          messages.some((msg) => !currentMessageIds.includes(msg.id)) ||
+          currentMessageIds.some(
+            (id) => !messages.find((msg) => msg.id === id)
           );
-          if (messageEl) {
-            const contentEl = messageEl.querySelector(".message-content");
-            if (contentEl && contentEl.innerText !== msg.content) {
-              return true;
-            }
 
-            // Also check for pin status changes
-            const isPinnedInDOM = messageEl.classList.contains("pinned");
-            const isPinnedInData = !!msg.pinned;
-            return isPinnedInDOM !== isPinnedInData;
-          }
-          return false;
-        });
+        // Only re-render if the messages have changed
+        if (messageChanged) {
+          // Remember scroll position to see if we're scrolled to bottom
+          const isAtBottom =
+            messagesContainer.scrollHeight - messagesContainer.scrollTop <=
+            messagesContainer.clientHeight + 50;
 
-        // Check for updated read receipts
-        const hasUpdatedReadReceipts = data.messages.some((msg) => {
-          const messageEl = document.querySelector(
-            `.message[data-message-id="${msg.id}"]`
-          );
-          if (messageEl && msg.sender === currentUsername) {
-            const currentStatus = messageEl.querySelector(
-              ".message-read-status"
-            );
-            if (currentStatus) {
-              // Check if read status has changed
-              const hasRead = msg.read_by && msg.read_by.length > 0;
-              const isCurrentlyMarkedRead =
-                currentStatus.querySelector(".read") !== null;
+          // Render with the updated messages
+          renderMessages(messages, isAtBottom);
 
-              // Check if delivered status has changed
-              const hasDelivered =
-                msg.delivered_to && msg.delivered_to.length > 0;
-              const isCurrentlyMarkedDelivered =
-                currentStatus.querySelector(".delivered") !== null ||
-                currentStatus.querySelector(".read") !== null;
-
-              return (
-                hasRead !== isCurrentlyMarkedRead ||
-                hasDelivered !== isCurrentlyMarkedDelivered
-              );
-            }
-          }
-          return false;
-        });
-
-        // Check if pinned message changed
-        let isPinnedMessageChanged = false;
-        const pinnedMessageContainer = document.getElementById(
-          "pinnedMessagesContainer"
-        );
-        if (data.pinned_message) {
-          // If there's a pinned message in the data
-          if (pinnedMessageContainer.classList.contains("hidden")) {
-            // And no pinned message is displayed
-            isPinnedMessageChanged = true;
+          // Check for new pinned message
+          if (data.pinned_message) {
+            displayPinnedMessage(data.pinned_message);
           } else {
-            // Or if the pinned message ID is different
-            const pinnedMsgEl =
-              pinnedMessageContainer.querySelector(".message");
-            if (
-              pinnedMsgEl &&
-              pinnedMsgEl.dataset.messageId !== data.pinned_message.id
-            ) {
-              isPinnedMessageChanged = true;
-            }
+            hidePinnedMessage();
           }
-        } else if (!pinnedMessageContainer.classList.contains("hidden")) {
-          // If there's no pinned message in the data but one is displayed
-          isPinnedMessageChanged = true;
         }
-
-        // Check for system message about chat deletion
-        const hasChatDeletedMessage = data.messages.some(
-          (msg) =>
-            msg.type === 0x02 &&
-            msg.content.includes("This chat has been deleted")
-        );
-
-        if (hasChatDeletedMessage) {
-          showDeletedChatEffect();
-        }
-
-        // If there are any changes, reload the chat
-        if (
-          hasNewMessages ||
-          hasDeletedMessages ||
-          hasEditedMessages ||
-          hasUpdatedReadReceipts ||
-          isPinnedMessageChanged
-        ) {
-          loadChatMessages(currentChat);
-        }
+      } else if (data.error_opcode === 0x17) {
+        // Chat not found, it might have been deleted
+        showDeletedChatEffect();
+        stopMessagePolling();
       }
     } catch (error) {
-      console.error("Polling error", error);
+      console.error("Error polling messages:", error);
     }
   }, POLLING_INTERVAL);
 }
@@ -2704,24 +2645,4 @@ function createLoadMoreButton() {
   loadMoreBtn.innerHTML = "Load More Messages";
   loadMoreBtn.addEventListener("click", loadMoreMessages);
   return loadMoreBtn;
-}
-
-// New function to render messages
-function renderMessages(messages) {
-  // Clear existing messages first
-  messagesContainer.innerHTML = "";
-
-  // Always add a load more button at the top if needed
-  if (messages.length >= currentMessageLimit) {
-    messagesContainer.appendChild(createLoadMoreButton());
-  }
-
-  // Add messages in chronological order (oldest first)
-  messages.forEach((msg) => {
-    const messageElement = createMessageElement(msg);
-    messagesContainer.appendChild(messageElement);
-  });
-
-  // Scroll to bottom to show newest messages
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }

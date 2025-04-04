@@ -243,7 +243,7 @@ select {
   overflow-y: auto;
   background-color: var(--background-color);
   display: flex;
-  flex-direction: column; /* Change from column-reverse to column */
+  flex-direction: column; /* Consistent across all devices - oldest at top */
 }
 
 .empty-state {
@@ -1294,7 +1294,7 @@ input:invalid {
 
   .messages-container {
     max-height: calc(60vh - 130px);
-    flex-direction: column !important; /* Force same direction as desktop */
+    /* No flex-direction override needed - keep consistent with desktop */
   }
 
   .message-input-container {
