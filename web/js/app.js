@@ -587,8 +587,11 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
       // Display regular messages
       const messagesToMarkAsRead = [];
 
-      // No need to reverse the messages anymore since they're coming in correct order
-      data.messages.forEach((msg) => {
+      // Reverse messages to show in chronological order (oldest first)
+      const chronologicalMessages = [...data.messages].reverse();
+
+      // Display messages in chronological order
+      chronologicalMessages.forEach((msg) => {
         if (
           msg.sender !== currentUsername &&
           !msg.read_by?.find((entry) => entry.username === currentUsername)
