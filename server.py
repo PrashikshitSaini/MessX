@@ -601,9 +601,9 @@ def get_chat_messages():
         pinned_message_id = chat_data.get('pinned_message', None)
         pinned_message = None
         
-        # Retrieve messages from the database, ordered by timestamp (ASCENDING instead of DESCENDING)
+        # Retrieve messages from the database, ordered by timestamp (DESCENDING to get newest messages first)
         messages_ref = db.collection('chats').document(chat_id).collection('messages')
-        messages_query = messages_ref.order_by('timestamp', direction=firestore.Query.ASCENDING).limit(limit)
+        messages_query = messages_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
         messages = messages_query.get()
         
         # Get the requester's custom display name preferences and blocked users, if any
