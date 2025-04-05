@@ -1383,3 +1383,13 @@ input:invalid {
 .sidebar-overlay.visible {
   display: block;
 }
+
+/* Add this to your CSS file */
+.message.optimistic {
+  opacity: 0.7;
+}
+
+.message.failed {
+  opacity: 0.5;
+  background-color: rgba(255, 0, 0, 0.1);
+}

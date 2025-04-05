@@ -512,6 +512,22 @@ messagesContainer.parentNode.insertBefore(
   messagesContainer
 );
 
+// Add the missing hidePinnedMessage function first
+function hidePinnedMessage() {
+  // Clear the pinned messages container
+  pinnedMessagesContainer.innerHTML = "";
+  pinnedMessagesContainer.style.display = "none";
+}
+
+// Add a displayPinnedMessage function if it's also missing
+function displayPinnedMessage(message) {
+  pinnedMessagesContainer.innerHTML = "";
+  pinnedMessagesContainer.style.display = "block";
+
+  const pinnedElement = createMessageElement(message, true);
+  pinnedMessagesContainer.appendChild(pinnedElement);
+}
+
 // New function to batch process read receipts
 async function processPendingReadReceipts() {
   if (pendingReadMessages.length === 0 || !currentChat || !authToken) return;
@@ -548,6 +564,32 @@ async function processPendingReadReceipts() {
 
 // Add a recurring timer to process read receipts
 setInterval(processPendingReadReceipts, 1500); // Process batches every 1.5 seconds
+
+// Fix the loadChatMessages function to avoid showing "loading" for minor updates
+async function updateMessagesWithoutLoading(chatName, actionType) {
+  try {
+    const data = await API.getMessages(
+      authToken,
+      chatName,
+      currentMessageLimit
+    );
+
+    if (data.opcode === 0x00) {
+      const messages = data.messages || [];
+      // Don't show loading indicator, just update in place
+      renderMessages(messages, actionType === "send");
+
+      // Update pinned message if exists
+      if (data.pinned_message) {
+        displayPinnedMessage(data.pinned_message);
+      } else {
+        hidePinnedMessage();
+      }
+    }
+  } catch (error) {
+    console.error("Error updating messages:", error);
+  }
+}
 
 // Update loadChatMessages to properly pass the scroll parameter
 async function loadChatMessages(chatName, scrollToBottom = false) {
@@ -840,7 +882,7 @@ function createMessageElement(msg, isPinnedDisplay = false) {
   return div;
 }
 
-// Update the pinMessage function to handle both pinning and unpinning
+// Update the pinMessage function to use the new update method
 async function pinMessage(messageId, shouldUnpin = false) {
   if (!currentChat) return;
   try {
@@ -856,7 +898,8 @@ async function pinMessage(messageId, shouldUnpin = false) {
       // Show success toast
       const message = shouldUnpin ? "Message unpinned" : "Message pinned";
       showToast(message, "success");
-      loadChatMessages(currentChat); // Reload to update pinned status
+      // Use the non-loading update method instead
+      updateMessagesWithoutLoading(currentChat, "pin");
     }
   } catch (error) {
     console.error(
@@ -1313,17 +1356,38 @@ sendMessageBtn.addEventListener("click", async () => {
   }
 
   try {
-    // Show optimistic UI update
+    // Show optimistic UI update - clear the input first
     messageInput.value = "";
+
+    // Create an optimistic message element right away
+    const optimisticMsg = {
+      content: message,
+      sender: currentUsername,
+      timestamp: new Date().toLocaleString(),
+      id: "temp-" + Date.now(),
+      type: 0x00,
+      sender_uid: "local", // Temporary ID
+    };
+
+    // Add the optimistic message to the UI
+    const msgElement = createMessageElement(optimisticMsg);
+    msgElement.classList.add("optimistic");
+    messagesContainer.appendChild(msgElement);
+
+    // Scroll to show the new message
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
     // Send the message
     const data = await API.sendMessage(authToken, chatName, message);
 
     if (data.opcode === 0x00) {
-      // Message sent successfully, reload chat messages and scroll to bottom
-      await loadChatMessages(chatName, true); // true = scroll to bottom
+      // On success, remove the optimistic message class
+      msgElement.classList.remove("optimistic");
+      // Update messages without loading screen
+      updateMessagesWithoutLoading(chatName, "send");
     } else {
-      // Handle API error
+      // On failure, mark the optimistic message as failed
+      msgElement.classList.add("failed");
       showToast(API.getErrorMessage(0x10, data.error_opcode), "error");
     }
   } catch (error) {
@@ -1645,6 +1709,7 @@ cancelEditMessageBtn.addEventListener("click", () =>
   closeModal(editMessageModal)
 );
 
+// Update edit message form submission
 editMessageForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!currentChat) {
@@ -1662,17 +1727,50 @@ editMessageForm.addEventListener("submit", async (e) => {
   }
 
   try {
+    // Close the modal first for better UX
+    closeModal(editMessageModal);
+
+    // Optimistically update the message text in the UI
+    const messageElement = document.querySelector(
+      `.message[data-message-id="${currentMessageId}"]`
+    );
+
+    if (messageElement) {
+      const contentElement = messageElement.querySelector(".message-content");
+      if (contentElement) {
+        // Save old content in case we need to revert
+        const oldContent = contentElement.innerHTML;
+        // Update UI immediately
+        contentElement.innerHTML = updatedMessage;
+
+        // Add edited indicator if not already there
+        const footer = messageElement.querySelector(".message-footer");
+        if (footer && !footer.querySelector(".message-edited-indicator")) {
+          const editedSpan = document.createElement("span");
+          editedSpan.className = "message-edited-indicator";
+          editedSpan.textContent = "(edited)";
+          footer.insertBefore(editedSpan, footer.firstChild);
+        }
+      }
+    }
+
     const data = await API.editMessage(
       authToken,
       currentChat,
       currentMessageId,
       updatedMessage
     );
+
     if (data.opcode === 0x00) {
       showToast("Message edited successfully", "success");
-      closeModal(editMessageModal);
-      loadChatMessages(currentChat); // Reload messages to show the updated message
+      // Update messages without loading screen
+      updateMessagesWithoutLoading(currentChat, "edit");
     } else {
+      // Revert optimistic update if there was an error
+      if (messageElement && contentElement) {
+        contentElement.innerHTML = oldContent;
+      }
+
       const errorCode = data.error_opcode;
       if (errorCode === 0x19) {
         showToast("Invalid chat name", "error");
