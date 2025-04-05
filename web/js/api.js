@@ -53,9 +53,9 @@ const API = {
         requestData.is_encrypted = false;
       }
 
-      console.log(
-        `Making request to ${endpoint} with opcode ${opcode.toString(16)}`
-      );
+      // console.log(
+      //   `Making request to ${endpoint} with opcode ${opcode.toString(16)}`
+      // );
 
       const response = await fetch(`${this.BASE_URL}${endpoint}`, {
         method: "POST",
