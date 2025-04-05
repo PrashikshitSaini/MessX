@@ -1691,7 +1691,10 @@ document
     const messageDiv = e.target.closest(".message");
     if (!messageDiv) return;
 
-    // Extract message ID (assuming you can store it as a data attribute)
+    // Only allow editing outgoing (your own) messages
+    if (!messageDiv.classList.contains("outgoing")) return;
+    
+    // Extract message ID
     currentMessageId = messageDiv.dataset.messageId;
     if (!currentMessageId) {
       console.warn("Message ID not found");
