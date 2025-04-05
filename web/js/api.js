@@ -5,69 +5,40 @@ const API = {
   // Helper method to make authenticated requests
   async makeRequest(endpoint, opcode, authToken, data = {}) {
     try {
-      // For login and register, don't include the auth token
-      const includeAuth = opcode !== 0x00 && opcode !== 0x01;
-      const token = includeAuth ? authToken : null;
+      // For login and register, don't add timestamp and nonce
+      const includeSecurityMeasures = opcode !== 0x00 && opcode !== 0x01;
 
-      // Simplify request data structure
+      // Clean request data structure - remove token from request body
       const requestData = {
         opcode: opcode,
         ...data,
       };
 
-      if (includeAuth && token) {
-        requestData.authentication_token = token;
+      // Add security measures for authenticated requests
+      if (includeSecurityMeasures) {
+        // Add timestamp and nonce for replay protection
+        requestData.request_timestamp = Date.now();
+        requestData.request_nonce = AuthUtils.generateSecureNonce();
       }
-
-      // In your makeRequest method, comment out or disable encryption:
-      if (opcode === 0x10) {
-        // Send message opcode - ENCRYPTION DISABLED
-        requestData.message = data.message;
-        requestData.is_encrypted = false;
-
-        /* Original encryption code commented out
-        try {
-          const userKeys = await AuthUtils.getUserKeys();
-          if (userKeys) {
-            const encryptedMessage = await CryptoUtils.encryptMessage(
-              data.message,
-              userKeys.publicKey
-            );
-            requestData.message = JSON.stringify(encryptedMessage);
-            requestData.is_encrypted = true;
-          } else {
-            requestData.message = data.message;
-            requestData.is_encrypted = false;
-          }
-        } catch (error) {
-          console.error("Error encrypting message:", error);
-          requestData.message = data.message;
-          requestData.is_encrypted = false;
-        }
-        */
-      }
-
-      // And similarly for message editing:
-      if (opcode === 0x11 && data.updated_message) {
-        requestData.updated_message = data.updated_message;
-        requestData.is_encrypted = false;
-      }
-
-      // console.log(
-      //   `Making request to ${endpoint} with opcode ${opcode.toString(16)}`
-      // );
 
       const response = await fetch(`${this.BASE_URL}${endpoint}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // Add CSRF token if available
+          ...(window.csrfToken ? { "X-CSRF-Token": window.csrfToken } : {}),
         },
+        // Important: include credentials to send cookies with the request
+        credentials: "include",
         body: JSON.stringify(requestData),
       });
 
       if (!response.ok) {
         console.error(`HTTP error: ${response.status}`);
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        return {
+          opcode: 0xff,
+          error_opcode: 0x45, // Server error
+        };
       }
 
       return await response.json();
@@ -75,8 +46,7 @@ const API = {
       console.error("API request error:", error);
       return {
         opcode: 0xff,
-        error_opcode: 0x45,
-        error_message: error.toString(),
+        error_opcode: 0x45, // Server error
       };
     }
   },
@@ -114,7 +84,7 @@ const API = {
       clientNonce,
     });
 
-    // If login was successful, check if we have encryption keys or need to generate them
+    // Handle encryption keys setup after successful login
     if (result.opcode === 0x01) {
       try {
         let userKeys = await AuthUtils.getUserKeys();
@@ -126,7 +96,6 @@ const API = {
         }
       } catch (error) {
         console.error("Error with encryption keys after login:", error);
-        // The app will continue without encryption if key handling fails
       }
     }
 
@@ -134,13 +103,13 @@ const API = {
   },
 
   async createChat(authToken, chatName) {
-    return this.makeRequest("/create-chat", 0x02, authToken, {
+    return this.makeRequest("/create-chat", 0x02, null, {
       chat_name: chatName,
     });
   },
 
   async addUserToChat(authToken, chatName, usernameToAdd) {
-    return this.makeRequest("/add-user-to-chat", 0x03, authToken, {
+    return this.makeRequest("/add-user-to-chat", 0x03, null, {
       chat_name: chatName,
       username_to_add: usernameToAdd,
     });
@@ -166,7 +135,7 @@ const API = {
   },
 
   async sendMessage(authToken, chatName, message) {
-    return this.makeRequest("/send-message", 0x10, authToken, {
+    return this.makeRequest("/send-message", 0x10, null, {
       chat_name: chatName,
       message,
       message_type: 0x00,
@@ -174,7 +143,7 @@ const API = {
   },
 
   async getMessages(authToken, chatName, limit = 50) {
-    return this.makeRequest("/get-messages", 0x11, authToken, {
+    return this.makeRequest("/get-messages", 0x11, null, {
       chat_name: chatName,
       limit,
     });
@@ -336,16 +305,20 @@ const API = {
     return result;
   },
 
-  async refreshToken(currentToken) {
+  // Update refreshToken to use cookies instead of sending token in body
+  async refreshToken() {
     try {
       const response = await fetch(`${this.BASE_URL}/refresh-token`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(window.csrfToken ? { "X-CSRF-Token": window.csrfToken } : {}),
         },
+        credentials: "include", // Send cookies
         body: JSON.stringify({
           opcode: 0x03, // Token refresh opcode
-          authentication_token: currentToken,
+          request_timestamp: Date.now(),
+          request_nonce: AuthUtils.generateSecureNonce(),
         }),
       });
 

@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask import make_response
 from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
@@ -19,6 +20,8 @@ from datetime import datetime  # Keep this one for datetime.now()
 JWT_SECRET = os.environ.get('JWT_SECRET', 'your-secure-random-secret-key')
 JWT_ALGORITHM = 'HS256'
 JWT_EXPIRY_DAYS = 7
+
+
 
 # Replace the token management functions with JWT versions
 def generate_token(user_data):
@@ -79,6 +82,11 @@ logger = logging.getLogger(__name__)
 # For demo purposes: store active sessions
 # In production, use a proper session management system
 active_sessions = {}  # Format: {token: {'uid': user_id, 'expires': timestamp}}
+
+# Configure secure cookie settings
+app.config['SESSION_COOKIE_SECURE'] = True  # Only send over HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True  # Not accessible via JavaScript
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Prevent CSRF
 
 # Account Creation Endpoint
 @app.route('/create-account', methods=['POST'])
@@ -153,18 +161,77 @@ def login():
             logger.warning(f"Invalid password for user: {username}")
             return jsonify({'opcode': 0x00, 'error_opcode': 0x03})  # Invalid credentials
         
-        # Generate JWT token
+         # Generate JWT token
         token_data = {
             'uid': user.uid,
             'username': username
         }
         jwt_token = generate_token(token_data)
         
-        logger.info(f"User {username} logged in successfully, JWT token created")
-        return jsonify({'opcode': 0x01, 'authentication_token': jwt_token})
+        # Create response object with the token as a secure cookie
+        response = make_response(jsonify({'opcode': 0x01}))
+        
+        # Set secure cookie with the token
+        max_age = JWT_EXPIRY_DAYS * 24 * 60 * 60  # days to seconds
+        response.set_cookie(
+            'auth_token',
+            jwt_token,
+            max_age=max_age,
+            httponly=True,
+            secure=True,  # Requires HTTPS
+            samesite='Lax'  # Prevent CSRF
+        )
+        
+        # Generate CSRF token (can be accessed by JavaScript)
+        csrf_token = secrets.token_hex(16)
+        response.set_cookie(
+            'csrf_token',
+            csrf_token,
+            max_age=max_age,
+            httponly=False,  # Must be accessible by JavaScript
+            secure=True,
+            samesite='Lax'
+        )
+        
+        logger.info(f"User {username} logged in successfully, JWT token created as secure cookie")
+        return response
+        
     except Exception as e:
         logger.error(f"Error during login: {str(e)}")
         return jsonify({'opcode': 0x00, 'error_opcode': 0x45})  # Unknown error
+
+
+# Update all other endpoints to get token from cookie instead of request body
+def verify_request_auth():
+    """Verify authentication token from cookie and CSRF token from header"""
+    auth_token = request.cookies.get('auth_token')
+    csrf_token = request.headers.get('X-CSRF-Token')
+    csrf_cookie = request.cookies.get('csrf_token')
+    
+    # Verify both tokens exist
+    if not auth_token:
+        return None, "Missing authentication token"
+    
+    # For non-GET requests, verify CSRF token
+    if request.method != 'GET' and (not csrf_token or not csrf_cookie or csrf_token != csrf_cookie):
+        return None, "CSRF validation failed"
+    
+    # Verify JWT token
+    session = verify_token(auth_token)
+    if not session:
+        return None, "Invalid or expired authentication token"
+    
+    # Check request timestamp and nonce to prevent replay attacks
+    if request.method != 'GET':
+        req_timestamp = request.json.get('request_timestamp')
+        current_time = int(time.time() * 1000)  # current time in milliseconds
+        
+        # Ensure timestamp is recent (within 5 minutes)
+        if not req_timestamp or (current_time - req_timestamp) > 5 * 60 * 1000:
+            return None, "Request timestamp expired or invalid"
+    
+    return session, None
+
 
 # Authenticated Endpoint Example
 @app.route('/some-endpoint', methods=['POST'])
@@ -317,23 +384,52 @@ def add_user_to_chat():
 @app.route('/refresh-token', methods=['POST'])
 def refresh_token():
     data = request.json
-    current_token = data.get('authentication_token')
     opcode = data.get('opcode')
     
     if opcode != 0x03:  # Token refresh opcode
         return jsonify({'opcode': opcode, 'error_opcode': 0x44})  # Unknown opcode
     
     try:
+        # Get the auth token from the cookie
+        auth_token = request.cookies.get('auth_token')
+        if not auth_token:
+            return jsonify({'opcode': 0x03, 'error_opcode': 0x48})  # Invalid token
+        
         # Verify the current token
-        session = verify_token(current_token)
+        session = verify_token(auth_token)
         if not session:
             return jsonify({'opcode': 0x03, 'error_opcode': 0x48})  # Invalid token
         
         # Generate a new token
         new_token = generate_token(session)
         
+        # Create response with the new token in a cookie
+        response = make_response(jsonify({'opcode': 0x00}))
+        
+        # Set secure cookie with the token
+        max_age = JWT_EXPIRY_DAYS * 24 * 60 * 60  # days to seconds
+        response.set_cookie(
+            'auth_token',
+            new_token,
+            max_age=max_age,
+            httponly=True,
+            secure=True,  # Requires HTTPS
+            samesite='Lax'  # Prevent CSRF
+        )
+        
+        # Generate new CSRF token
+        csrf_token = secrets.token_hex(16)
+        response.set_cookie(
+            'csrf_token',
+            csrf_token,
+            max_age=max_age,
+            httponly=False,  # Must be accessible by JavaScript
+            secure=True,
+            samesite='Lax'
+        )
+        
         logger.info(f"Token refreshed for user {session['username']}")
-        return jsonify({'opcode': 0x00, 'new_token': new_token})
+        return response
     except Exception as e:
         logger.error(f"Error refreshing token: {str(e)}")
         return jsonify({'opcode': 0x03, 'error_opcode': 0x45})  # Unknown error
@@ -2205,6 +2301,36 @@ def mark_messages_as_read_batch():
     except Exception as e:
         logger.error(f"Error batch marking messages as read: {str(e)}")
         return jsonify({'opcode': 0x25, 'error_opcode': 0x45})  # Unknown error
+
+@app.route('/check-login-status', methods=['GET'])
+def check_login_status():
+    """Endpoint to check if user is logged in and get username"""
+    auth_token = request.cookies.get('auth_token')
+    
+    if not auth_token:
+        return jsonify({'authenticated': False})
+    
+    session = verify_token(auth_token)
+    if not session:
+        return jsonify({'authenticated': False})
+    
+    return jsonify({
+        'authenticated': True,
+        'username': session['username']
+    })
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    """Logout endpoint to clear cookies"""
+    response = make_response(jsonify({'opcode': 0x00}))
+    
+    # Clear auth token cookie
+    response.set_cookie('auth_token', '', expires=0)
+    
+    # Clear CSRF token cookie
+    response.set_cookie('csrf_token', '', expires=0)
+    
+    return response
 
 if __name__ == '__main__':
     logger.info("Starting server on port 3000")

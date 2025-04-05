@@ -75,6 +75,7 @@ function debounce(func, wait) {
 // Add near the top of app.js
 let tokenRefreshInterval = null;
 
+// Update the token refresher to stop storing tokens in localStorage
 function startTokenRefresher() {
   // Clear any existing interval
   if (tokenRefreshInterval) {
@@ -84,16 +85,10 @@ function startTokenRefresher() {
   // Refresh token every 6 hours
   tokenRefreshInterval = setInterval(async () => {
     try {
-      if (!authToken) return;
-
       console.log("Attempting to refresh token...");
-      const result = await API.refreshToken(authToken);
+      const result = await API.refreshToken();
 
-      if (result.opcode === 0x00 && result.new_token) {
-        // Update token
-        authToken = result.new_token;
-        localStorage.setItem("authToken", authToken);
-        localStorage.setItem("tokenTimestamp", Date.now().toString());
+      if (result.opcode === 0x00) {
         console.log("Token refreshed successfully");
       } else {
         console.error("Failed to refresh token:", result);
@@ -130,7 +125,51 @@ document.addEventListener("DOMContentLoaded", () => {
     // Load chats
     loadChats();
   }
+
+  // Get CSRF token from cookie
+  const csrfToken = getCookie("csrf_token");
+  if (csrfToken) {
+    window.csrfToken = csrfToken;
+  }
+
+  // Check login status via a simple endpoint
+  checkLoginStatus();
 });
+
+// Helper function to get a cookie by name
+function getCookie(name) {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(";").shift();
+}
+
+// Function to check login status via API
+async function checkLoginStatus() {
+  try {
+    const response = await fetch(`${API.BASE_URL}/check-login-status`, {
+      method: "GET",
+      credentials: "include", // Send cookies
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.authenticated && data.username) {
+        // User is logged in
+        currentUsername = data.username;
+        currentUsernameSpan.innerText = currentUsername;
+
+        // Show main container
+        authContainer.classList.add("hidden");
+        mainContainer.classList.remove("hidden");
+
+        // Load chats
+        loadChats();
+      }
+    }
+  } catch (error) {
+    console.error("Error checking login status:", error);
+  }
+}
 
 // Initialize buttons from DOM - place this near the top with other DOM elements
 const generateInviteLinkBtn = document.getElementById("generateInviteLinkBtn");
@@ -181,7 +220,7 @@ authTabs.forEach((tab) => {
   });
 });
 
-// Login form submission with enhanced error handling
+// Update the login form handler
 loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const username = document.getElementById("loginUsername").value;
@@ -197,16 +236,11 @@ loginForm.addEventListener("submit", async (e) => {
     const passwordHash = await sha256(password);
     const data = await API.login(username, passwordHash);
 
-    // console.log("Login response:", data); // Debug logging
-
-    if (data.opcode === 0x01 && data.authentication_token) {
-      // Simply store the token directly
-      authToken = data.authentication_token;
-
-      // Also store in localStorage as a backup with timestamp
-      localStorage.setItem("authToken", authToken);
+    // The server now sets the auth token as HttpOnly cookie
+    // We only need to check for successful login
+    if (data.opcode === 0x01) {
+      // Store username only (token now managed by browser cookies)
       localStorage.setItem("username", username);
-      localStorage.setItem("tokenTimestamp", Date.now().toString());
 
       currentUsername = username;
       currentUsernameSpan.innerText = username;
@@ -215,10 +249,7 @@ loginForm.addEventListener("submit", async (e) => {
       loadChats();
       showToast(`Welcome back, ${username}!`, "success");
 
-      // Start token refresher
-      startTokenRefresher();
-
-      // Check if there's a pending invite link
+      // Check for pending invite link
       const pendingInviteLink = localStorage.getItem("pendingInviteLink");
       if (pendingInviteLink) {
         // Process the invite link
@@ -368,16 +399,38 @@ registerForm.addEventListener("submit", async (e) => {
 });
 
 // Logout button
-logoutBtn.addEventListener("click", () => {
-  authToken = null;
+logoutBtn.addEventListener("click", async () => {
+  try {
+    // Call the logout endpoint to invalidate the token
+    await fetch(`${API.BASE_URL}/logout`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": window.csrfToken || "",
+      },
+      body: JSON.stringify({
+        opcode: 0x04, // Logout opcode
+        request_timestamp: Date.now(),
+        request_nonce: AuthUtils.generateSecureNonce(),
+      }),
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+  }
+
+  // Clear local state
   currentUsername = null;
+  localStorage.removeItem("username");
+
+  // Reset UI
   mainContainer.classList.add("hidden");
   authContainer.classList.remove("hidden");
 
-  // Stop message polling when logging out
+  // Stop message polling
   stopMessagePolling();
 
-  // Clear any other app state
+  // Clear other app state
   currentChat = null;
   currentMessageId = null;
 });
