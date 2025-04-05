@@ -606,8 +606,9 @@ async function loadChatMessages(chatName, scrollToBottom = false) {
       </div>`;
   }
 }
+
 // Replace the renderMessages function with this consistent implementation
-function renderMessages(messages) {
+function renderMessages(messages, scrollToBottom = false) {
   // Clear existing messages first
   messagesContainer.innerHTML = "";
 
