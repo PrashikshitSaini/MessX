@@ -197,7 +197,7 @@ loginForm.addEventListener("submit", async (e) => {
     const passwordHash = await sha256(password);
     const data = await API.login(username, passwordHash);
 
-    console.log("Login response:", data); // Debug logging
+    // console.log("Login response:", data); // Debug logging
 
     if (data.opcode === 0x01 && data.authentication_token) {
       // Simply store the token directly
